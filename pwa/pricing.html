@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#FF5D47" />
+    <meta name="description" content="Splits pricing — free forever. No subscriptions, no ads, no paywalls." />
+    <meta property="og:title" content="Splits – Pricing" />
+    <meta property="og:description" content="Free. That's the whole page." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Splits – Pricing" />
+    <meta name="twitter:description" content="Free. That's the whole page." />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet" />
+    <title>Pricing · Splits</title>
+    <style>
+      :root {
+        --bg: #fdfcfb;
+        --ink: #1a1c1e;
+        --muted: #64748b;
+        --primary: #ff5d47;
+        --primary-hover: #e54233;
+        --card: #ffffff;
+      }
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: 'Plus Jakarta Sans', 'Avenir Next', 'Helvetica Neue', sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ── Nav ── */
+      .nav {
+        padding: 16px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        text-decoration: none;
+        color: var(--ink);
+        font-weight: 800;
+        font-size: 18px;
+      }
+      .brand-icon {
+        width: 32px;
+        height: 32px;
+        background: var(--primary);
+        color: #fff;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        font-size: 18px;
+      }
+      .nav-link {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 600;
+        transition: color 0.15s;
+      }
+      .nav-link:hover { color: var(--ink); }
+
+      /* ── Main ── */
+      .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 24px 80px;
+        text-align: center;
+      }
+      .price-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        margin-bottom: 32px;
+      }
+      .price {
+        font-size: clamp(72px, 18vw, 120px);
+        font-weight: 800;
+        color: var(--ink);
+        letter-spacing: -4px;
+        line-height: 1;
+      }
+      .lol {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--muted);
+        margin-bottom: 14px;
+      }
+      .sub {
+        font-size: 16px;
+        color: var(--muted);
+        font-weight: 500;
+        max-width: 320px;
+        line-height: 1.5;
+        margin-bottom: 36px;
+      }
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--primary);
+        color: #fff;
+        border: none;
+        border-radius: 9999px;
+        padding: 16px 36px;
+        font-size: 17px;
+        font-weight: 800;
+        font-family: inherit;
+        cursor: pointer;
+        text-decoration: none;
+        box-shadow: 0 8px 24px rgba(255, 93, 71, 0.3);
+        transition: background 0.15s, transform 0.1s;
+      }
+      .cta:hover { background: var(--primary-hover); }
+      .cta:active { transform: scale(0.97); }
+
+      /* ── Footer ── */
+      .footer {
+        padding: 24px;
+        text-align: center;
+      }
+      .footer-text {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        opacity: 0.5;
+        letter-spacing: 1px;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="nav">
+      <a href="/" class="brand">
+        <div class="brand-icon">+</div>
+        <span>Splits</span>
+      </a>
+      <a href="/" class="nav-link">Back to app</a>
+    </nav>
+
+    <div class="main">
+      <div class="price-row">
+        <span class="price">free</span>
+        <span class="lol">(lol)</span>
+      </div>
+      <p class="sub">No subscriptions. No ads. No paywalls. Just split your bill and move on.</p>
+      <a href="/" class="cta">okay i'll split</a>
+    </div>
+
+    <footer class="footer">
+      <span class="footer-text">usesplits.app</span>
+    </footer>
+  </body>
+</html>

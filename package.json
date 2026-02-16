@@ -1,0 +1,38 @@
+{
+  "name": "splits",
+  "version": "0.1.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "dev": "expo start --clear",
+    "dev:pwa": "cd pwa && python3 -m http.server 5173",
+    "start": "expo start",
+    "build:web": "expo export --platform web",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "deploy:ocr": "supabase functions deploy ocr-receipt",
+    "deploy:all": "supabase functions deploy"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~3.2.3",
+    "@supabase/supabase-js": "^2.49.1",
+    "expo": "~51.0.0",
+    "expo-clipboard": "~6.0.3",
+    "expo-image-manipulator": "~12.0.5",
+    "expo-image-picker": "~15.0.0",
+    "expo-notifications": "~0.28.19",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-native": "0.74.3",
+    "react-native-svg": "15.2.0",
+    "react-native-url-polyfill": "^2.0.0",
+    "react-native-view-shot": "3.8.0",
+    "react-native-web": "~0.19.10"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.2",
+    "@types/react": "~18.2.45",
+    "typescript": "~5.4.5"
+  },
+  "private": true
+}

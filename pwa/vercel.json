@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/split/:id", "destination": "/split.html" },
+    { "source": "/pricing", "destination": "/pricing.html" },
+    { "source": "/contact", "destination": "/contact.html" }
+  ]
+}

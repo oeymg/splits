@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Splits",
+    "slug": "splits",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan receipts to split bills.",
+        "NSPhotoLibraryUsageDescription": "Choose receipt photos to split bills.",
+        "NSUserNotificationsUsageDescription": "Send payment reminders to group members."
+      }
+    },
+    "android": {
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "POST_NOTIFICATIONS"]
+    }
+  }
+}

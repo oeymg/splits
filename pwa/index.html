@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#FF5D47" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Splits" />
+    <meta name="description" content="Snap a receipt, tap who had what, send the nudge. Free bill splitting." />
+
+    <!-- OG / Social sharing -->
+    <meta property="og:title" content="Splits – Split bills in seconds" />
+    <meta property="og:description" content="Snap a receipt, tap who had what, send the nudge. Free forever." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="./icons/icon.svg" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Splits – Split bills in seconds" />
+    <meta name="twitter:description" content="Snap a receipt, tap who had what, send the nudge." />
+
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icons/icon.svg" />
+
+    <!-- DNS prefetch for Google Fonts -->
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!-- Preload critical assets -->
+    <link rel="preload" href="./styles.css" as="style" />
+    <link rel="preload" href="./app.js" as="script" />
+
+    <!-- Inline critical above-the-fold styles for instant paint -->
+    <style>
+      *{box-sizing:border-box}body{margin:0;font-family:'Plus Jakarta Sans','Avenir Next','Helvetica Neue',sans-serif;background:#fdfcfb;color:#1a1c1e;min-height:100vh}.intro{position:fixed;inset:0;background:#fdfcfb;display:grid;place-items:center;z-index:999;overflow:hidden}.intro-panel{position:absolute;top:0;width:50%;height:100%;background:#fdfcfb}.intro-panel.left{left:0}.intro-panel.right{right:0}.intro-word{font-size:clamp(3rem,12vw,7rem);color:#1a1c1e;font-weight:800;letter-spacing:-0.02em;position:relative;width:100vw;height:1em;line-height:1}.word-layer{position:absolute;inset:0;display:block;text-align:center;transition:transform .8s ease,opacity .8s ease}.word-left{clip-path:inset(0 50% 0 0)}.word-right{clip-path:inset(0 0 0 50%)}
+    </style>
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>Splits · Receipt-first bill splitting</title>
+  </head>
+  <body>
+    <div class="intro" id="intro" aria-hidden="true">
+      <div class="intro-panel left"></div>
+      <div class="intro-panel right"></div>
+      <div class="intro-word">
+        <span class="word-layer word-left">Splits</span>
+        <span class="word-layer word-right">Splits</span>
+      </div>
+    </div>
+    <div class="bg-orb orb-one"></div>
+    <div class="bg-orb orb-two"></div>
+    <div class="hero-shape"></div>
+
+    <nav class="top-nav">
+      <div class="nav-inner">
+        <div class="brand">
+          <div class="brand-icon">+</div>
+          <span>Splits</span>
+        </div>
+        <div class="nav-links">
+          <a href="#flow">Experience</a>
+          <a href="#flow">How it works</a>
+        </div>
+        <button class="nav-cta">Get Early Access</button>
+      </div>
+    </nav>
+
+    <div class="site-shell">
+      <section class="hero-panel">
+        <div class="hero-badge">
+          <span class="pulse-dot"></span>
+          Now live in South Brisbane
+        </div>
+        <h1 class="hero-title">
+          Settle the bill <span class="brand-gradient-text">effortlessly.</span>
+        </h1>
+        <p class="hero-copy">
+          Splits uses smart OCR to scan receipts fast. No calculator. No awkward follow‑ups. Just a clean split in seconds.
+        </p>
+        <div class="hero-actions">
+          <button class="primary hero-primary">Get Early Access</button>
+          <button class="ghost hero-secondary">See how it works</button>
+        </div>
+        <div class="hero-proof">
+          <div class="avatars">
+            <div class="avatar">F</div>
+            <div class="avatar">A</div>
+            <div class="avatar">J</div>
+          </div>
+          <p class="hero-proof-text">"Used by 500+ locals last weekend."</p>
+        </div>
+      </section>
+
+      <section class="device-panel" id="flow">
+        <div class="phone-frame">
+          <div class="phone-notch"></div>
+          <div class="app">
+            <header class="app-bar">
+              <div>
+                <p class="app-title">Splits</p>
+                <p class="app-sub">Make sure your friends pay</p>
+              </div>
+              <div class="app-status">
+                <span class="status-dot"></span>
+                <span id="stepStatus">Step 1 of 5</span>
+              </div>
+            </header>
+
+            <main>
+              <section class="start-screen" id="startScreen">
+                <div class="start-card">
+                  <p class="start-eyebrow">Receipt-first split</p>
+                  <h1 class="start-title">Splits</h1>
+                  <p class="start-sub">Snap a receipt, tap who had what, then send the "You owe $X" nudge.</p>
+                  <div class="cta-row" id="ctaRow">
+                    <button class="primary" id="ctaReady">I'm ready to split</button>
+                    <button class="secondary" id="ctaHow">How do I split?</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="flow" id="flowInner">
+                <div class="stepper" id="stepper"></div>
+
+                <section class="panel step" data-step="1" data-animate>
+          <div class="panel-header">
+            <div>
+              <h2>1. Who came with you?</h2>
+            </div>
+            <button class="ghost" id="importContacts">Grab contacts</button>
+          </div>
+          <div class="row">
+            <label class="field">
+              <span>What are we calling this?</span>
+              <input id="groupName" placeholder="Friday Dinner" />
+            </label>
+            <label class="field">
+              <span>Who fronted it?</span>
+              <div class="chip-row" id="payerChips"></div>
+            </label>
+          </div>
+          <div class="people-list" id="peopleList"></div>
+          <div class="row">
+            <label class="field">
+              <span>Add someone</span>
+              <input id="newPerson" placeholder="Name" />
+            </label>
+            <button class="primary" id="addPerson">Add</button>
+          </div>
+          <div class="step-actions">
+            <button class="secondary" data-step-back>Back</button>
+            <button class="primary" data-step-next>Next</button>
+          </div>
+          </section>
+
+          <section class="panel step" data-step="2" data-animate>
+          <div class="panel-header">
+            <div>
+              <h2>2. Show the receipt</h2>
+              <p>Snap, upload, or use a sample.</p>
+            </div>
+            <div class="pill" id="processing">Ready</div>
+          </div>
+          <div class="row">
+            <button class="primary" id="snapReceipt">Snap it</button>
+            <button class="secondary" id="pickReceipt">Pick a photo</button>
+            <button class="secondary" id="sampleReceipt">Use sample</button>
+            <input id="receiptInput" type="file" accept="image/*" capture="environment" hidden />
+          </div>
+          <div class="receipt-preview" id="receiptPreview">No receipt yet</div>
+          <div class="row">
+            <label class="field">
+              <span>Where were you?</span>
+              <input id="merchant" placeholder="Cafe" />
+            </label>
+            <label class="field">
+              <span>When was this?</span>
+              <input id="date" placeholder="YYYY-MM-DD" />
+            </label>
+          </div>
+          <div class="row">
+            <label class="field">
+              <span>Subtotal</span>
+              <input id="subtotal" placeholder="0.00" />
+            </label>
+            <label class="field">
+              <span>Tax</span>
+              <input id="tax" placeholder="0.00" />
+            </label>
+            <label class="field">
+              <span>Total</span>
+              <input id="total" placeholder="0.00" />
+            </label>
+          </div>
+          <div class="step-actions">
+            <button class="secondary" data-step-back>Back</button>
+            <button class="primary" data-step-next>Next</button>
+          </div>
+          </section>
+
+          <section class="panel step" data-step="3" data-animate>
+          <div class="panel-header">
+            <div>
+              <h2>3. Who ate what?</h2>
+              <p>Tap multiple people to split shared items.</p>
+            </div>
+            <button class="ghost" id="addItem">Add item</button>
+          </div>
+          <div id="itemsList" class="items"></div>
+          <div class="summary-line" id="itemsSummary"></div>
+          <div class="warning" id="itemsWarning"></div>
+          <div class="step-actions">
+            <button class="secondary" data-step-back>Back</button>
+            <button class="primary" data-step-next>Next</button>
+          </div>
+          </section>
+
+          <section class="panel step" data-step="4" data-animate>
+          <div class="panel-header">
+            <div>
+              <h2>4. Who owes who?</h2>
+              <p>Auto-calc the damage.</p>
+            </div>
+          </div>
+          <div id="summaryList" class="summary"></div>
+          <div class="payment-card">
+            <p class="payment-title">Pay the hero</p>
+            <p id="paymentDetails"></p>
+            <label class="field">
+              <span>Payer PayID</span>
+              <input id="payid" placeholder="you@payid" />
+            </label>
+          </div>
+          <div class="step-actions">
+            <button class="secondary" data-step-back>Back</button>
+            <button class="primary" data-step-next>Next</button>
+          </div>
+          </section>
+
+          <section class="panel step" data-step="5" data-animate>
+          <div class="panel-header">
+            <div>
+              <h2>5. Send the nudge</h2>
+              <p>Share the summary (no payment rails).</p>
+            </div>
+          </div>
+          <div class="row share-actions">
+            <button class="primary" id="shareSummary">Share summary</button>
+            <button class="secondary" id="copySummary">Copy text</button>
+            <button class="secondary" id="shareLink">Copy link</button>
+            <button class="secondary" id="showQR">Show QR</button>
+            <button class="secondary" id="exportImage">Save as image</button>
+          </div>
+          <div id="qrContainer" class="qr-container" style="display:none"></div>
+          <pre class="share-card" id="shareCard"></pre>
+          <div class="step-actions">
+            <button class="secondary" data-step-back>Back</button>
+            <button class="primary" data-step-next>Done</button>
+          </div>
+          </section>
+              </section>
+            </main>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#FF5D47" />
+    <meta name="description" content="Someone split a bill with you on Splits." />
+    <meta property="og:title" content="Splits – You've been split" />
+    <meta property="og:description" content="Someone split a bill with you. Tap to see what you owe." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Splits – You've been split" />
+    <meta name="twitter:description" content="Someone split a bill with you. Tap to see what you owe." />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <title>Split Details · Splits</title>
+    <style>
+      :root {
+        --bg: #fdfcfb;
+        --ink: #1a1c1e;
+        --muted: #64748b;
+        --primary: #ff5d47;
+        --primary-hover: #e54233;
+        --card: #ffffff;
+        --border: #e7dfd2;
+        --bg-soft: #fff7f5;
+      }
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: 'Plus Jakarta Sans', 'Avenir Next', 'Helvetica Neue', sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ── Nav ── */
+      .nav {
+        padding: 16px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        text-decoration: none;
+        color: var(--ink);
+        font-weight: 800;
+        font-size: 18px;
+      }
+      .brand-icon {
+        width: 32px;
+        height: 32px;
+        background: var(--primary);
+        color: #fff;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        font-size: 18px;
+      }
+      .nav-link {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 600;
+        transition: color 0.15s;
+      }
+      .nav-link:hover { color: var(--ink); }
+
+      /* ── Main ── */
+      .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 24px 16px 80px;
+        max-width: 520px;
+        margin: 0 auto;
+        width: 100%;
+      }
+
+      /* ── Loading ── */
+      .loading {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+      }
+      .spinner {
+        width: 32px;
+        height: 32px;
+        border: 3px solid var(--border);
+        border-top-color: var(--primary);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .loading-text {
+        font-size: 14px;
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      /* ── Fallback ── */
+      .fallback {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 40px 24px;
+      }
+      .fallback-emoji { font-size: 48px; margin-bottom: 20px; }
+      .fallback-title {
+        font-size: 24px;
+        font-weight: 800;
+        letter-spacing: -1px;
+        margin-bottom: 8px;
+      }
+      .fallback-sub {
+        font-size: 15px;
+        color: var(--muted);
+        font-weight: 500;
+        line-height: 1.5;
+        max-width: 300px;
+        margin-bottom: 28px;
+      }
+
+      /* ── Split Card ── */
+      .split-card {
+        width: 100%;
+        background: var(--card);
+        border-radius: 20px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+        overflow: hidden;
+      }
+      .split-header {
+        background: var(--primary);
+        color: #fff;
+        padding: 28px 24px 24px;
+      }
+      .split-group {
+        font-size: 24px;
+        font-weight: 800;
+        letter-spacing: -1px;
+        margin-bottom: 4px;
+      }
+      .split-meta {
+        font-size: 14px;
+        font-weight: 500;
+        opacity: 0.85;
+      }
+      .split-total-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid rgba(255,255,255,0.2);
+      }
+      .split-total-label {
+        font-size: 14px;
+        font-weight: 600;
+        opacity: 0.8;
+      }
+      .split-total-value {
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: -1px;
+      }
+
+      /* ── Items ── */
+      .items-section {
+        padding: 20px 24px;
+      }
+      .items-title {
+        font-size: 11px;
+        font-weight: 800;
+        color: var(--muted);
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 14px;
+      }
+      .item-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        padding: 10px 0;
+        border-bottom: 1px solid #f0ebe5;
+      }
+      .item-row:last-child { border-bottom: none; }
+      .item-name {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--ink);
+        flex: 1;
+      }
+      .item-people {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      .item-price {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--ink);
+        margin-left: 16px;
+        white-space: nowrap;
+      }
+
+      /* ── People Breakdown ── */
+      .people-section {
+        padding: 20px 24px 24px;
+        border-top: 1px solid #f0ebe5;
+      }
+      .people-title {
+        font-size: 11px;
+        font-weight: 800;
+        color: var(--muted);
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 14px;
+      }
+      .person-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 0;
+      }
+      .person-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .person-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-weight: 700;
+        font-size: 13px;
+      }
+      .person-name {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .person-payer {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--primary);
+        background: var(--bg-soft);
+        padding: 2px 8px;
+        border-radius: 6px;
+        margin-left: 8px;
+      }
+      .person-amount {
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: -0.5px;
+      }
+
+      /* ── CTA ── */
+      .cta-section {
+        text-align: center;
+        margin-top: 28px;
+      }
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--primary);
+        color: #fff;
+        border: none;
+        border-radius: 9999px;
+        padding: 16px 36px;
+        font-size: 17px;
+        font-weight: 800;
+        font-family: inherit;
+        cursor: pointer;
+        text-decoration: none;
+        box-shadow: 0 8px 24px rgba(255, 93, 71, 0.3);
+        transition: background 0.15s, transform 0.1s;
+      }
+      .cta:hover { background: var(--primary-hover); }
+      .cta:active { transform: scale(0.97); }
+      .cta-sub {
+        display: block;
+        margin-top: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      /* ── Footer ── */
+      .footer {
+        padding: 24px;
+        text-align: center;
+      }
+      .footer-text {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        opacity: 0.5;
+        letter-spacing: 1px;
+      }
+
+      /* ── Hidden ── */
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <nav class="nav">
+      <a href="/" class="brand">
+        <div class="brand-icon">+</div>
+        <span>Splits</span>
+      </a>
+      <a href="/" class="nav-link">Open Splits</a>
+    </nav>
+
+    <div class="main">
+      <!-- Loading state -->
+      <div class="loading" id="loadingState">
+        <div class="spinner"></div>
+        <span class="loading-text">Loading split...</span>
+      </div>
+
+      <!-- Fallback state -->
+      <div class="fallback hidden" id="fallbackState">
+        <div class="fallback-emoji">🔍</div>
+        <h1 class="fallback-title">Split not found</h1>
+        <p class="fallback-sub">This split link may have expired or the URL might be wrong.</p>
+        <a href="/" class="cta">Get Splits</a>
+      </div>
+
+      <!-- Split content -->
+      <div class="hidden" id="splitContent" style="width:100%">
+        <div class="split-card">
+          <div class="split-header">
+            <div class="split-group" id="groupName"></div>
+            <div class="split-meta" id="splitMeta"></div>
+            <div class="split-total-row">
+              <span class="split-total-label">Total</span>
+              <span class="split-total-value" id="splitTotal"></span>
+            </div>
+          </div>
+
+          <div class="items-section" id="itemsSection">
+            <div class="items-title">Items</div>
+            <div id="itemsList"></div>
+          </div>
+
+          <div class="people-section">
+            <div class="people-title">Who owes what</div>
+            <div id="peopleList"></div>
+          </div>
+        </div>
+
+        <div class="cta-section">
+          <a href="/" class="cta">Split your own bill</a>
+          <span class="cta-sub">Free forever. No sign-up required.</span>
+        </div>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <span class="footer-text">usesplits.app</span>
+    </footer>
+
+    <script>
+      const SUPABASE_URL = 'https://nztqbqybfeyvrwmjjndp.supabase.co';
+      const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56dHFicXliZmV5dnJ3bWpqbmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA1MTk5NDksImV4cCI6MjA4NjA5NTk0OX0.6p-vO-3FXnM1niIbA8z7_7dM08vvdH7ccrGeU-rszls';
+
+      const AVATAR_COLORS = ['#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#f97316'];
+
+      function getAvatarColor(id) {
+        const hash = id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+        return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+      }
+
+      function formatCurrency(n) {
+        return '$' + Number(n).toFixed(2);
+      }
+
+      function getShareId() {
+        // Try path: /split/abc123
+        const pathMatch = window.location.pathname.match(/\/split\/([a-zA-Z0-9]+)/);
+        if (pathMatch) return pathMatch[1];
+        // Fallback: ?id=abc123
+        const params = new URLSearchParams(window.location.search);
+        return params.get('id');
+      }
+
+      function showFallback() {
+        document.getElementById('loadingState').classList.add('hidden');
+        document.getElementById('fallbackState').classList.remove('hidden');
+      }
+
+      function showSplit(data) {
+        const receipt = data.receipt;
+        const people = data.people;
+        const payerId = data.payer_id;
+
+        // Header
+        document.getElementById('groupName').textContent = data.group_name || 'Split';
+        const metaParts = [];
+        if (receipt.merchant) metaParts.push(receipt.merchant);
+        if (receipt.date) metaParts.push(receipt.date);
+        document.getElementById('splitMeta').textContent = metaParts.join(' · ') || '';
+        document.getElementById('splitTotal').textContent = formatCurrency(receipt.total || 0);
+
+        // Items
+        const itemsList = document.getElementById('itemsList');
+        const lineItems = receipt.lineItems || [];
+        if (lineItems.length === 0) {
+          document.getElementById('itemsSection').classList.add('hidden');
+        } else {
+          const peopleMap = {};
+          people.forEach(p => { peopleMap[p.id] = p.name; });
+
+          lineItems.forEach(item => {
+            const row = document.createElement('div');
+            row.className = 'item-row';
+
+            const left = document.createElement('div');
+            const name = document.createElement('div');
+            name.className = 'item-name';
+            name.textContent = item.name;
+            left.appendChild(name);
+
+            if (item.assignedTo && item.assignedTo.length > 0) {
+              const assigned = document.createElement('div');
+              assigned.className = 'item-people';
+              assigned.textContent = item.assignedTo.map(id => peopleMap[id] || id).join(', ');
+              left.appendChild(assigned);
+            }
+
+            const price = document.createElement('div');
+            price.className = 'item-price';
+            price.textContent = formatCurrency(item.price);
+
+            row.appendChild(left);
+            row.appendChild(price);
+            itemsList.appendChild(row);
+          });
+        }
+
+        // Per-person breakdown
+        const peopleList = document.getElementById('peopleList');
+        const subtotal = receipt.subtotal || receipt.total || 0;
+        const total = receipt.total || 0;
+        const taxRatio = subtotal > 0 ? total / subtotal : 1;
+
+        // Calculate each person's share
+        const shares = {};
+        people.forEach(p => { shares[p.id] = 0; });
+
+        lineItems.forEach(item => {
+          const assigned = item.assignedTo || [];
+          if (assigned.length === 0) return;
+          const perPerson = (item.price || 0) / assigned.length;
+          assigned.forEach(id => {
+            if (shares[id] !== undefined) shares[id] += perPerson;
+          });
+        });
+
+        // Apply tax proportionally
+        people.forEach(p => {
+          shares[p.id] = shares[p.id] * taxRatio;
+        });
+
+        // Sort: payer first, then by amount descending
+        const sorted = [...people].sort((a, b) => {
+          if (a.id === payerId) return -1;
+          if (b.id === payerId) return 1;
+          return (shares[b.id] || 0) - (shares[a.id] || 0);
+        });
+
+        sorted.forEach(person => {
+          const row = document.createElement('div');
+          row.className = 'person-row';
+
+          const left = document.createElement('div');
+          left.className = 'person-left';
+
+          const avatar = document.createElement('div');
+          avatar.className = 'person-avatar';
+          avatar.style.background = getAvatarColor(person.id);
+          avatar.textContent = (person.name || '?')[0].toUpperCase();
+          left.appendChild(avatar);
+
+          const name = document.createElement('span');
+          name.className = 'person-name';
+          name.textContent = person.name;
+          left.appendChild(name);
+
+          if (person.id === payerId) {
+            const badge = document.createElement('span');
+            badge.className = 'person-payer';
+            badge.textContent = 'paid';
+            left.appendChild(badge);
+          }
+
+          const amount = document.createElement('span');
+          amount.className = 'person-amount';
+          amount.textContent = formatCurrency(shares[person.id] || 0);
+
+          row.appendChild(left);
+          row.appendChild(amount);
+          peopleList.appendChild(row);
+        });
+
+        // Show content
+        document.getElementById('loadingState').classList.add('hidden');
+        document.getElementById('splitContent').classList.remove('hidden');
+      }
+
+      async function init() {
+        const shareId = getShareId();
+        if (!shareId) {
+          showFallback();
+          return;
+        }
+
+        try {
+          const res = await fetch(
+            `${SUPABASE_URL}/rest/v1/splits?share_id=eq.${encodeURIComponent(shareId)}&select=*`,
+            {
+              headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+              },
+            }
+          );
+
+          if (!res.ok) {
+            showFallback();
+            return;
+          }
+
+          const rows = await res.json();
+          if (!rows || rows.length === 0) {
+            showFallback();
+            return;
+          }
+
+          showSplit(rows[0]);
+        } catch (err) {
+          console.error('Failed to load split:', err);
+          showFallback();
+        }
+      }
+
+      init();
+    </script>
+  </body>
+</html>

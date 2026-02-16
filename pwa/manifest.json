@@ -1,0 +1,27 @@
+{
+  "name": "Splits – Receipt-first bill splitting",
+  "short_name": "Splits",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FDFCFB",
+  "theme_color": "#FF5D47",
+  "description": "Snap a receipt, tap who had what, send the nudge. Free forever.",
+  "categories": ["finance", "utilities"],
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "./",
+    "method": "GET",
+    "params": {
+      "url": "share_url",
+      "text": "share_text"
+    }
+  }
+}
