@@ -1,12 +1,16 @@
 import React from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { borderRadius, colors, spacing } from '../theme';
+import { FloatingNavPill } from '../components/FloatingNavPill';
 
 type Props = {
     onStart: () => void;
+    onHome: () => void;
+    onTryDemo: () => void;
+    onPricing: () => void;
 };
 
-export function PricingScreen({ onStart }: Props) {
+export function PricingScreen({ onStart, onHome, onTryDemo, onPricing }: Props) {
     return (
         <SafeAreaView style={styles.safe}>
             <View style={styles.container}>
@@ -23,6 +27,11 @@ export function PricingScreen({ onStart }: Props) {
                     <Text style={styles.ctaText}>okay i'll split</Text>
                 </Pressable>
             </View>
+            <FloatingNavPill
+                onHome={onHome}
+                onTryDemo={onTryDemo}
+                onPricing={onPricing}
+            />
         </SafeAreaView>
     );
 }

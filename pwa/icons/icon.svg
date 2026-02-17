@@ -1,10 +1,10 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="paint0" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1F6F8B"/>
-      <stop offset="1" stop-color="#E8C97A"/>
-    </linearGradient>
-  </defs>
-  <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#paint0)"/>
-  <path d="M166 196C166 158 196 134 241 134C286 134 312 154 321 186L284 195C279 177 265 166 241 166C217 166 203 177 203 194C203 214 221 221 249 227L273 233C316 243 342 262 342 304C342 349 306 378 250 378C195 378 160 351 150 307L189 299C196 324 215 343 250 343C283 343 302 329 302 309C302 289 286 282 258 276L235 271C193 262 166 241 166 196Z" fill="#FFF8E9"/>
+  <!-- Coral rounded square background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#FF5D47"/>
+  <!-- Three receipt lines, slightly rotated -->
+  <g transform="rotate(-15 256 256)">
+    <rect x="156" y="176" width="200" height="28" rx="14" fill="white" opacity="0.5"/>
+    <rect x="156" y="242" width="200" height="28" rx="14" fill="white"/>
+    <rect x="156" y="308" width="200" height="28" rx="14" fill="white" opacity="0.5"/>
+  </g>
 </svg>

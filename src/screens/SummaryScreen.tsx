@@ -515,7 +515,6 @@ const styles = StyleSheet.create({
         backgroundColor: colors.success + '10',
         borderRadius: borderRadius.md,
         padding: spacing.md,
-        marginHorizontal: -spacing.md,
         borderWidth: 2,
         borderColor: colors.success + '30'
     },
@@ -593,9 +592,10 @@ const styles = StyleSheet.create({
         ...shadows.sm,
     },
     viralButtonText: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: '600',
         color: colors.text,
+        textAlign: 'center',
     },
     qrCard: {
         backgroundColor: colors.bgCard,

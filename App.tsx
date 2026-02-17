@@ -109,6 +109,7 @@ function AppInner() {
           onStart={() => setStep('group')}
           onTryDemo={handleTryDemo}
           onPricing={() => setStep('pricing')}
+          onHome={() => setStep('welcome')}
         />
       );
 
@@ -160,7 +161,12 @@ function AppInner() {
 
     case 'pricing':
       return (
-        <PricingScreen onStart={() => setStep('group')} />
+        <PricingScreen
+          onStart={() => setStep('group')}
+          onHome={() => setStep('welcome')}
+          onTryDemo={handleTryDemo}
+          onPricing={() => setStep('pricing')}
+        />
       );
   }
 }

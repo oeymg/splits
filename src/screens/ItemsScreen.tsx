@@ -273,20 +273,21 @@ const styles = StyleSheet.create({
         marginBottom: spacing.md
     },
     itemName: {
-        flex: 2,
+        flex: 1,
         fontSize: 15,
         color: colors.text,
-        fontWeight: '600'
+        fontWeight: '600',
+        minWidth: 0,
     },
     itemPrice: {
-        flex: 1,
+        width: 80,
         fontSize: 15,
         fontWeight: '700',
         color: colors.text,
         textAlign: 'right',
         backgroundColor: colors.bgSubtle,
         borderRadius: borderRadius.sm,
-        paddingHorizontal: spacing.md,
+        paddingHorizontal: spacing.sm,
         paddingVertical: spacing.sm,
         borderWidth: 1,
         borderColor: colors.border

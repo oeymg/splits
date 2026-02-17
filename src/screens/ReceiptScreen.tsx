@@ -719,7 +719,8 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
-        marginBottom: spacing.xs
+        marginBottom: spacing.xs,
+        gap: spacing.md,
     },
     resultLabel: {
         fontSize: 10,
@@ -732,7 +733,8 @@ const styles = StyleSheet.create({
     resultMerchant: {
         fontSize: 18,
         fontWeight: '700',
-        color: colors.text
+        color: colors.text,
+        flexShrink: 1,
     },
     resultDate: {
         fontSize: 14,

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
 import {
     Animated,
-    Linking,
     Pressable,
     SafeAreaView,
     StyleSheet,
@@ -13,11 +12,13 @@ import {
     NativeScrollEvent,
 } from 'react-native';
 import { colors, spacing, borderRadius, shadows } from '../theme';
+import { FloatingNavPill } from '../components/FloatingNavPill';
 
 type Props = {
     onStart: () => void;
     onTryDemo: () => void;
     onPricing: () => void;
+    onHome: () => void;
 };
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -29,8 +30,6 @@ const SECTION_HORIZONTAL_PADDING = IS_SMALL_SCREEN ? spacing.lg : spacing.xxl;
 // SPLITS text sizing — use a generous container so justifyContent:'center' handles alignment
 const SPLITS_FONT_SIZE = IS_SMALL_SCREEN ? 102 : 140;
 const SPLITS_BOX = SPLITS_FONT_SIZE * 2; // tall box, text centered inside via flexbox
-
-const NAV_ITEMS = ['Pricing', 'Try a Demo', 'Contact Us'] as const;
 
 const STEPS = [
     { emoji: '\u{1F4F8}', label: 'Snap', desc: 'Photo your receipt' },
@@ -261,7 +260,7 @@ function RotatingQuotes() {
     );
 }
 
-export function WelcomeScreen({ onStart, onTryDemo, onPricing }: Props) {
+export function WelcomeScreen({ onStart, onTryDemo, onPricing, onHome }: Props) {
     const scrollY = useRef(new Animated.Value(0)).current;
     const fadeIn = useRef(new Animated.Value(0)).current;
     const bounceAnim = useRef(new Animated.Value(0)).current;
@@ -359,18 +358,6 @@ export function WelcomeScreen({ onStart, onTryDemo, onPricing }: Props) {
             scrollRef.current?.scrollTo({ y: target, animated: true });
         }
     }, []);
-
-    const handleNavPress = (item: string) => {
-        if (item === 'Try a Demo') {
-            onTryDemo();
-        }
-        if (item === 'Pricing') {
-            onPricing();
-        }
-        if (item === 'Contact Us') {
-            Linking.openURL('https://usesplits.app/contact');
-        }
-    };
 
     return (
         <SafeAreaView style={styles.safeArea}>
@@ -577,28 +564,18 @@ export function WelcomeScreen({ onStart, onTryDemo, onPricing }: Props) {
 
             {/* ═══════════ Floating Nav Pill ═══════════ */}
                 <Animated.View
-                    style={[
-                        styles.floatingPill,
-                        {
-                            opacity: pillOpacity,
-                            transform: [{ translateY: pillTranslateY }],
-                        },
-                    ]}
+                    style={{
+                        opacity: pillOpacity,
+                        transform: [{ translateY: pillTranslateY }],
+                    }}
                     pointerEvents="auto"
                 >
-                    {NAV_ITEMS.map((item, i) => (
-                        <Pressable
-                            key={item}
-                            style={({ pressed }) => [
-                                styles.pillItem,
-                                i < NAV_ITEMS.length - 1 && styles.pillItemBorder,
-                                pressed && { opacity: 0.6 },
-                            ]}
-                            onPress={() => handleNavPress(item)}
-                        >
-                            <Text style={styles.pillText}>{item}</Text>
-                        </Pressable>
-                    ))}
+                    <FloatingNavPill
+                        onHome={onHome}
+                        onTryDemo={onTryDemo}
+                        onPricing={onPricing}
+                        showHome={false}
+                    />
                 </Animated.View>
             </View>
         </SafeAreaView>
@@ -1036,39 +1013,6 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: colors.textMuted + '60',
         letterSpacing: 1,
-    },
-
-    // ── Floating Nav Pill ─────────────────────
-    floatingPill: {
-        position: 'absolute',
-        bottom: 40,
-        alignSelf: 'center',
-        flexDirection: 'row',
-        backgroundColor: colors.textMain,
-        borderRadius: borderRadius.full,
-        paddingVertical: 6,
-        paddingHorizontal: 6,
-        zIndex: 50,
-        ...shadows.lg,
-        shadowColor: '#000000',
-        shadowOpacity: 0.2,
-        shadowRadius: 24,
-        shadowOffset: { width: 0, height: 12 },
-        elevation: 10,
-    },
-    pillItem: {
-        paddingVertical: 12,
-        paddingHorizontal: IS_SMALL_SCREEN ? 12 : 18,
-    },
-    pillItemBorder: {
-        borderRightWidth: 1,
-        borderRightColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    pillText: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: '#ffffff',
-        letterSpacing: 0.2,
     },
 
     // ── Enhanced: Headline accent ────────────
