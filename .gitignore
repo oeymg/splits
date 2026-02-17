@@ -7,4 +7,6 @@ yarn-debug.*
 yarn-error.*
 .DS_Store
 .env
+.env.example
+supabase/.env.example
 dist
