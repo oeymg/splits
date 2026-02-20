@@ -16,6 +16,14 @@
     },
     "android": {
       "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "POST_NOTIFICATIONS"]
+    },
+    "web": {
+      "favicon": "./pwa/icons/icon-512.png",
+      "name": "Splits",
+      "shortName": "Splits",
+      "description": "Snap a receipt, tap who had what, send the nudge. Free bill splitting.",
+      "themeColor": "#FF5D47",
+      "backgroundColor": "#FDFCFB"
     }
   }
 }
