@@ -1,0 +1,10 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Coral rounded square background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#FF5D47"/>
+  <!-- Three receipt lines, slightly rotated -->
+  <g transform="rotate(-15 256 256)">
+    <rect x="156" y="176" width="200" height="28" rx="14" fill="white" opacity="0.5"/>
+    <rect x="156" y="242" width="200" height="28" rx="14" fill="white"/>
+    <rect x="156" y="308" width="200" height="28" rx="14" fill="white" opacity="0.5"/>
+  </g>
+</svg>
