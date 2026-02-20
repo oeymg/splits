@@ -1,11 +1,13 @@
-const CACHE_NAME = 'splits-pwa-v7';
+const CACHE_NAME = 'splits-pwa-v8';
 const STATIC_ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './manifest.json',
-  './icons/icon.svg'
+  './icons/icon.svg',
+  './icons/icon-192.png',
+  './icons/icon-512.png'
 ];
 
 // Install: precache all static assets
