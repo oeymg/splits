@@ -30,14 +30,17 @@ export function computeAllocationSummary(lineItems: LineItem[], people: Person[]
 }
 
 /**
- * rounds to 2 decimal places to avoid floating point errors
+ * Computes per-person settlements.
+ * Surcharge (e.g. weekend/public holiday surcharge) is distributed
+ * proportionally based on each person's share of the item subtotal.
+ * In Australia, GST is already included in item prices — do not pass tax here.
  */
-
 export function computeSettlements(
   lineItems: LineItem[],
   people: Person[],
   receiptTotal: number,
-  payerId: string
+  payerId: string,
+  surcharge = 0
 ): SettlementEntry[] {
   // 1. Initialize per-user totals
   const userSubtotals: Record<string, number> = {};
@@ -49,6 +52,7 @@ export function computeSettlements(
   });
 
   // 2. Calculate sum of all assigned items
+  let assignedTotal = 0;
   for (const item of lineItems) {
     if (!item.allocatedTo || item.allocatedTo.length === 0) continue;
 
@@ -57,29 +61,30 @@ export function computeSettlements(
     const perPersonPrice = price / splitCount;
 
     item.allocatedTo.forEach((userId) => {
-      // Add to subtotal
       userSubtotals[userId] = (userSubtotals[userId] || 0) + perPersonPrice;
-
-      // Add to item list
       if (!userItems[userId]) userItems[userId] = [];
-      userItems[userId].push({
-        name: item.name,
-        price: perPersonPrice,
-        splitCount
-      });
+      userItems[userId].push({ name: item.name, price: perPersonPrice, splitCount });
     });
+
+    assignedTotal += price;
   }
 
-  // 3. Build final results — include everyone (payer too)
+  // 3. Build final results with proportional surcharge
   return people
     .map((person) => {
-      const subtotal = userSubtotals[person.id] || 0;
+      const subtotal = round2(userSubtotals[person.id] || 0);
+
+      // Distribute surcharge proportionally to each person's item share
+      const personSurcharge =
+        surcharge > 0 && assignedTotal > 0
+          ? round2((subtotal / assignedTotal) * surcharge)
+          : 0;
 
       return {
         person,
-        subtotal: round2(subtotal),
-        taxAndTip: 0,
-        totalOwed: round2(subtotal),
+        subtotal,
+        surcharge: personSurcharge,
+        totalOwed: round2(subtotal + personSurcharge),
         isPayer: person.id === payerId,
         items: userItems[person.id] || []
       };
@@ -92,10 +97,10 @@ export function computeSettlements(
     });
 }
 
-export function formatCurrency(amount: number, currency = 'USD') {
+export function formatCurrency(amount: number, currency = 'AUD') {
   const safeAmount = Number.isFinite(amount) ? amount : 0;
   try {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat('en-AU', {
       style: 'currency',
       currency,
       minimumFractionDigits: 2

@@ -194,6 +194,25 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
                         <Text style={styles.totalLabel}>Items subtotal</Text>
                         <Text style={styles.totalValue}>{formatCurrency(summary.subtotal)}</Text>
                     </View>
+                    <View style={styles.surchargeRow}>
+                        <Text style={styles.totalLabel}>Surcharge</Text>
+                        <Text style={styles.surchargeHint}>(weekend, public holiday, etc.)</Text>
+                        <TextInput
+                            style={styles.surchargeInput}
+                            value={receipt.surcharge ? receipt.surcharge.toString() : ''}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                            onChangeText={(v) =>
+                                setReceipt((prev) => ({ ...prev, surcharge: coerceNumber(v) || undefined }))
+                            }
+                        />
+                    </View>
+                    <View style={[styles.totalRow, styles.grandTotalRow]}>
+                        <Text style={[styles.totalLabel, styles.grandTotalLabel]}>Total</Text>
+                        <Text style={[styles.totalValue, styles.grandTotalValue]}>
+                            {formatCurrency(summary.subtotal + (receipt.surcharge || 0))}
+                        </Text>
+                    </View>
                     {unassigned > 0 ? (
                         <Text style={styles.warningText}>⚠️ {formatCurrency(unassigned)} still needs homes</Text>
                     ) : (
@@ -375,6 +394,46 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '800',
         color: colors.text
+    },
+    surchargeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+        marginBottom: spacing.sm,
+        flexWrap: 'wrap'
+    },
+    surchargeHint: {
+        fontSize: 12,
+        color: colors.textMuted,
+        flex: 1
+    },
+    surchargeInput: {
+        width: 80,
+        fontSize: 15,
+        fontWeight: '700',
+        color: colors.text,
+        textAlign: 'right',
+        backgroundColor: colors.bgSubtle,
+        borderRadius: borderRadius.sm,
+        paddingHorizontal: spacing.sm,
+        paddingVertical: spacing.sm,
+        borderWidth: 1,
+        borderColor: colors.border
+    },
+    grandTotalRow: {
+        borderTopWidth: 1,
+        borderTopColor: colors.border,
+        paddingTop: spacing.sm,
+        marginTop: spacing.xs,
+        marginBottom: spacing.sm
+    },
+    grandTotalLabel: {
+        fontSize: 16,
+        fontWeight: '700'
+    },
+    grandTotalValue: {
+        fontSize: 18,
+        color: colors.primary
     },
     warningText: {
         fontSize: 13,

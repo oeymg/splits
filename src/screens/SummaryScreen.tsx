@@ -39,9 +39,8 @@ export function SummaryScreen({ groupName, receipt, people, payerId, onStartOver
     const summaryRef = useRef<any>(null);
 
     const settlements = useMemo(
-        // We now ignore receipt.total and just calculate from allocated items to ensure totals match step 3
-        () => computeSettlements(receipt.lineItems, people, 0, payerId),
-        [receipt.lineItems, people, payerId]
+        () => computeSettlements(receipt.lineItems, people, 0, payerId, receipt.surcharge ?? 0),
+        [receipt.lineItems, people, payerId, receipt.surcharge]
     );
 
     // Auto-save and generate shareable link on mount
@@ -140,7 +139,7 @@ export function SummaryScreen({ groupName, receipt, people, payerId, onStartOver
         });
     }, []);
 
-    // Calculate the 'Actual Total' (sum of all allocated items) to show instead of receipt total
+    // Sum of all allocated items + surcharge
     const allocatedTotal = useMemo(() =>
         settlements.reduce((sum, s) => sum + s.totalOwed, 0)
         , [settlements]);
@@ -286,6 +285,12 @@ export function SummaryScreen({ groupName, receipt, people, payerId, onStartOver
                                             <Text style={styles.breakdownPrice}>{formatCurrency(item.price)}</Text>
                                         </View>
                                     ))}
+                                    {entry.surcharge > 0 && (
+                                        <View style={styles.breakdownRow}>
+                                            <Text style={styles.breakdownName}>Surcharge</Text>
+                                            <Text style={styles.breakdownPrice}>{formatCurrency(entry.surcharge)}</Text>
+                                        </View>
+                                    )}
                                 </View>
                             </View>
                         ))}

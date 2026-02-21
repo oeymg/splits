@@ -10,7 +10,7 @@ type ParsedReceipt = {
   date: string;
   time?: string;
   subtotal?: number;
-  tax?: number;
+  surcharge?: number;
   total: number;
   lineItems: ParsedLineItem[];
   rawOcrText: string;
@@ -30,141 +30,120 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false }
 });
 
+// ─── Structured Output Schema ────────────────────────────────────────
+// Guarantees Gemini always returns valid JSON matching this shape.
+// No markdown wrapping, no JSON.parse failures.
+const RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    merchant: { type: 'STRING' },
+    date: { type: 'STRING' },
+    time: { type: 'STRING', nullable: true },
+    lineItems: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          price: { type: 'NUMBER' },
+          quantity: { type: 'INTEGER', nullable: true }
+        },
+        required: ['name', 'price']
+      }
+    },
+    subtotal: { type: 'NUMBER', nullable: true },
+    surcharge: { type: 'NUMBER', nullable: true },
+    total: { type: 'NUMBER' }
+  },
+  required: ['merchant', 'date', 'lineItems', 'total']
+};
+
+// ─── Prompt ──────────────────────────────────────────────────────────
+const RECEIPT_PROMPT = `You are an expert Australian receipt parser.
+
+AUSTRALIAN CONTEXT (important):
+- GST (10%) is already INCLUDED in all displayed prices. Never extract it as a line item.
+- Lines like "Incl. GST $2.50" or "GST Component $2.50" are informational — skip them completely.
+- Weekend, public holiday, or service surcharges (e.g. "15% surcharge $4.50", "Public holiday surcharge $3.00") ARE real charges — put the dollar amount in the surcharge field.
+- Payment lines (EFTPOS, PayWave, Visa, Cash, Change) are NOT items — skip them.
+- Skip: ABN, addresses, phone numbers, "Thank you", loyalty points, order/table/server numbers.
+
+EXTRACTION RULES:
+- merchant: Business name (usually the largest or first text at the top).
+- date: YYYY-MM-DD. AU receipts use DD/MM/YYYY — convert accordingly.
+- time: HH:MM in 24-hour format. Null if not present.
+- lineItems: Extract EVERY item with a name and a price greater than zero.
+  - name: Descriptive name only — strip leading product/barcode codes (e.g. "516268 Doritos" → "Doritos", "30482355 KALLAX Shelf" → "KALLAX Shelf").
+  - price: The price as displayed (GST already included).
+  - quantity: Number of units if stated, otherwise omit.
+  - If a modifier follows an item (e.g. "Add Bacon $2.00"), append it to the item name (e.g. "Burger - Add Bacon"), price = modifier price only if it has its own price.
+  - "2x Flat White $8.00" → name="Flat White", price=8.00, quantity=2.
+  - If item name and price are on separate lines, merge them.
+- subtotal: Sum of items before surcharge, if shown. Null otherwise.
+- surcharge: Dollar amount of any surcharge (weekend, public holiday, service fee). Null if none.
+- total: The final amount charged.
+
+VENUE HINTS:
+- Cafes/Restaurants: Look for food and drink items. Each has a name and price.
+- Supermarkets (Woolworths, Coles, Aldi, IGA): Strip leading product codes, ignore savings/specials lines.
+- IKEA: Strip 8-digit article codes, keep product names and measurements (e.g. "60x147 cm").
+- Bottle shops/Pubs: Alcohol items are valid line items.
+
+Extract all items accurately. The sum of lineItem prices should be close to the subtotal or total.`;
+
 // ─── Helpers ────────────────────────────────────────────────────────
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
+  for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
 }
 
-/**
- * Retry helper with exponential backoff
- * Retries failed API calls to improve reliability
- */
+function classifyError(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('rate limit')) {
+    return 'OCR is busy right now — wait a moment and try again.';
+  }
+  if (msg.includes('503') || msg.toLowerCase().includes('unavailable')) {
+    return 'OCR service is temporarily unavailable. Try again shortly.';
+  }
+  if (msg.includes('413') || msg.toLowerCase().includes('too large')) {
+    return 'Image is too large to process. Try a closer, cropped photo of just the receipt.';
+  }
+  if (msg.includes('400') && msg.toLowerCase().includes('image')) {
+    return 'Could not read the image. Make sure the receipt is well-lit and in focus.';
+  }
+  return msg;
+}
+
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  maxRetries = 3,
+  maxRetries = 2,
   baseDelay = 1000
 ): Promise<T> {
   let lastError: Error | null = null;
-
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await fn();
     } catch (error) {
       lastError = error as Error;
-
-      // Don't retry on the last attempt
       if (attempt === maxRetries - 1) break;
-
-      // Calculate exponential backoff: 1s, 2s, 4s
       const delay = baseDelay * Math.pow(2, attempt);
       console.warn(`Attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
-
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-
   throw lastError || new Error('All retry attempts failed');
 }
 
-// ─── Shared Prompt ──────────────────────────────────────────────────
-// Used by both Gemini Vision (image) and Gemini Text parsers.
+// ─── Gemini Vision (PRIMARY) ─────────────────────────────────────────
+// Sends the image directly. Gemini sees layout, columns, and alignment.
+// Uses structured output — guaranteed valid JSON, no parsing failures.
 
-const RECEIPT_PROMPT = `You are an expert receipt parser. Analyze the receipt and extract structured data.
-
-CRITICAL INSTRUCTIONS:
-1. EVERY item on the receipt MUST have a name - never leave name empty or use generic text
-2. Process EACH LINE that has an item name and price - don't skip lines
-3. Item names should be descriptive (e.g. "Burger", "Coffee", "Pizza") NOT codes or numbers
-
-CONTEXT ANALYSIS:
-1. Identify the Merchant Name and Venue Type (Restaurant, Bar, Grocery, Retail, Furniture, Warehouse, Café, Taxi, Utility).
-2. Use Venue Type to guide extraction:
-   - Restaurant/Bar/Café: Expect food/drink items. Ignore table numbers, seat numbers, server names, "Guest Copy".
-   - Grocery/Retail: Expect product names/barcodes. Ignore membership/points, "Savings".
-   - Furniture/Warehouse: Expect product codes, descriptions, and SKUs (IKEA, Costco).
-
-3. VENDOR-SPECIFIC RULES:
-
-   **IKEA Receipts:**
-   - Format: "Article #" or "Item #" followed by article number, then description, then price
-   - Example: "30482355 KALLAX Shelf unit $149.00" → name="KALLAX Shelf unit", price=149.00
-   - Product codes are 8 digits and should be REMOVED from item names
-   - Multiple identical items shown as "Qty: 2" or "2x" on a separate line
-   - Look for section headers like "FURNITURE", "HOME DECOR" and skip them
-   - IKEA often has measurements in item names (e.g. "60x147 cm") - keep these
-
-   **COSTCO Receipts:**
-   - Format: Item number (usually 6-8 digits) + description + price, often split across multiple lines
-   - Example: "12345678 Kirkland Water 40pk $5.99" → name="Kirkland Water 40pk", price=5.99
-   - Item codes at START of line should be removed from names
-   - Codes at END of line (e.g. "E", "A", "T") indicate tax status - ignore these
-   - "SUBTOTAL" appears before tax, use this to validate item sum
-   - Warehouse/membership numbers should be ignored
-   - Prices ending in ".97" are often clearance items (this is normal)
-
-   **ALDI / SUPERMARKET RULES:**
-   - **Ignore leading product codes**: 6-digit code before item name (e.g. "516268 Doritos"). Do NOT include in name.
-   - **Ignore trailing tax flags**: "A", "B", or "*" after prices (e.g. "6.99 B"). Extract "6.99", ignore the "B".
-   - **Weighted Items**: "0.450 kg @ $12.00/kg" → look for FINAL PRICE on that line or nearby. Use total price, not unit price.
-
-   **RESTAURANT RECEIPTS:**
-   - Each food/drink item should have a clear name
-   - Example: "Cheeseburger 15.50" → name="Cheeseburger", price=15.50
-   - Example: "Coke 3.50" → name="Coke", price=3.50
-   - If you see a description followed by a price, that's an item - include it!
-
-4. Modifiers: If a line modifies the previous item (e.g. "Add Cheese", "No Ice", or $0.00 options), APPEND it to the item name (e.g. "Burger - Add Cheese"). Do NOT list it separately.
-
-EXTRACTION RULES:
-- Merchant name: usually the largest/first text at the top.
-- Date: extract in YYYY-MM-DD format. If ambiguous (e.g. 02/03/2024), prefer DD/MM/YYYY (Australian format).
-- Time: extract in HH:MM format (24-hour). Look for timestamps near the date, transaction time, or "Time:" labels. If no time is found, use null.
-- LINE ITEMS: CRITICAL - Extract EVERY line that has both an item description and a price
-  - Each item MUST have a name property that describes what it is
-  - "2x Lemonade 12.00" → name="Lemonade", price=12.00, quantity=2
-  - "Burger 15.50" → name="Burger", price=15.50, quantity=1
-  - "Coffee" on one line, "3.50" on next line → name="Coffee", price=3.50, quantity=1
-  - Price must be > 0 to be a standalone item.
-  - NEVER leave name empty - always extract the item description
-- SKIP: addresses, phone numbers, ABN/tax IDs, payment methods (VISA, EFTPOS), change, loyalty points, barcodes, QR references, "Thank you" messages.
-- Extract subtotal, tax/GST/VAT, and total separately.
-- BLURRY/FADED TEXT: Use context to infer words. If a price is unclear, look for the column alignment. If completely unreadable, skip the item.
-
-CRITICAL: The sum of all lineItem prices should approximately equal the subtotal (before tax).
-If you notice a discrepancy, re-check — you may have missed an item or mis-read a price.
-
-Respond ONLY with valid JSON (no markdown, no backticks, no explanation):
-{
-  "merchant": "Merchant Name",
-  "venueType": "Restaurant",
-  "date": "YYYY-MM-DD",
-  "time": "HH:MM",
-  "lineItems": [
-    {"name": "Item Name", "price": 12.50, "quantity": 1}
-  ],
-  "subtotal": 25.00,
-  "tax": 2.50,
-  "total": 27.50
-}
-
-REMEMBER: EVERY lineItem MUST have a descriptive name field. Never use empty strings or generic placeholders.
-If you cannot determine a field, use null or empty string (except for lineItem names - those are required).`;
-
-// ─── Gemini Vision (Multimodal) — PRIMARY ───────────────────────────
-// Sends the receipt IMAGE directly to Gemini. It can see layout,
-// columns, alignment, and reads receipts far more accurately than
-// a text-only pipeline (Vision API → flat text → Gemini).
-
-async function parseWithGeminiVision(base64Image: string): Promise<ParsedReceipt | null> {
+async function parseWithGeminiVision(base64Image: string, mimeType = 'image/jpeg'): Promise<ParsedReceipt | null> {
   if (!geminiApiKey) return null;
 
   try {
-    // Wrap API call with retry logic for better reliability
     const response = await retryWithBackoff(async () => {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
@@ -175,69 +154,55 @@ async function parseWithGeminiVision(base64Image: string): Promise<ParsedReceipt
             contents: [{
               parts: [
                 { text: RECEIPT_PROMPT },
-                {
-                  inlineData: {
-                    mimeType: 'image/jpeg',
-                    data: base64Image
-                  }
-                }
+                { inlineData: { mimeType, data: base64Image } }
               ]
             }],
             generationConfig: {
               temperature: 0.1,
-              maxOutputTokens: 4096
+              maxOutputTokens: 4096,
+              responseMimeType: 'application/json',
+              responseSchema: RESPONSE_SCHEMA
             }
           }),
-          signal: AbortSignal.timeout(30000) // 30 second timeout
+          signal: AbortSignal.timeout(30000)
         }
       );
 
       if (!res.ok) {
         const errorText = await res.text();
         console.error('Gemini Vision error:', res.status, errorText);
-        throw new Error(`Gemini Vision API error: ${res.status}`);
+        throw new Error(`Gemini Vision API error: ${res.status} — ${errorText.slice(0, 200)}`);
       }
-
       return res;
-    }, 2); // Max 2 retries for vision (expensive API)
+    });
 
     const json = await response.json();
     const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    if (!text) return null;
 
-    const cleaned = text
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim();
-
-    const parsed = JSON.parse(cleaned);
-    if (!parsed || typeof parsed !== 'object') return null;
-
-    const result = validateAndBuild(parsed, '(image → Gemini Vision)');
+    // With structured output, text is guaranteed valid JSON — no cleaning needed
+    const parsed = JSON.parse(text);
+    const result = validateAndBuild(parsed, '');
     if (result) {
-      result.confidence = 0.95; // High confidence for vision-based parsing
+      result.confidence = 0.95;
       result.method = 'gemini-vision';
     }
-
     return result;
   } catch (error) {
-    console.error('Gemini Vision failed after retries:', error);
+    console.error('Gemini Vision failed:', classifyError(error));
     return null;
   }
 }
 
-// ─── Gemini Text Parser — FALLBACK 1 ────────────────────────────────
-// Takes OCR text (from Vision API) and parses it with Gemini.
+// ─── Gemini Text Parser (FALLBACK 1) ─────────────────────────────────
+// Used when image is unavailable. Sends raw OCR text from Vision API.
 
 async function parseWithGeminiText(ocrText: string): Promise<ParsedReceipt | null> {
   if (!geminiApiKey) return null;
 
-  const prompt = `${RECEIPT_PROMPT}
-
-OCR TEXT:
-${ocrText}`;
+  const prompt = `${RECEIPT_PROMPT}\n\nRECEIPT TEXT:\n${ocrText}`;
 
   try {
-    // Use retry logic for text parsing
     const response = await retryWithBackoff(async () => {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
@@ -248,146 +213,111 @@ ${ocrText}`;
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
               temperature: 0.1,
-              maxOutputTokens: 2048
+              maxOutputTokens: 2048,
+              responseMimeType: 'application/json',
+              responseSchema: RESPONSE_SCHEMA
             }
           }),
-          signal: AbortSignal.timeout(20000) // 20 second timeout
+          signal: AbortSignal.timeout(20000)
         }
       );
 
       if (!res.ok) {
         const errorText = await res.text();
-        console.error('Gemini text error:', errorText);
-        throw new Error(`Gemini Text API error: ${res.status}`);
+        throw new Error(`Gemini Text API error: ${res.status} — ${errorText.slice(0, 200)}`);
       }
-
       return res;
-    }, 2);
+    });
 
     const json = await response.json();
     const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    if (!text) return null;
 
-    const cleaned = text
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim();
-
-    const parsed = JSON.parse(cleaned);
-    if (!parsed || typeof parsed !== 'object') return null;
-
+    const parsed = JSON.parse(text);
     const result = validateAndBuild(parsed, ocrText);
     if (result) {
-      result.confidence = 0.75; // Medium-high confidence for text-based parsing
+      result.confidence = 0.75;
       result.method = 'gemini-text';
     }
-
     return result;
   } catch (error) {
-    console.error('Gemini text failed after retries:', error);
+    console.error('Gemini text failed:', classifyError(error));
     return null;
   }
 }
 
-// ─── Shared Validation & Builder ────────────────────────────────────
+// ─── Validation & Builder ────────────────────────────────────────────
 
 function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null {
   const validationWarnings: string[] = [];
 
   const lineItems: ParsedLineItem[] = (parsed.lineItems ?? [])
     .map((item: any) => {
-      // Coerce price/quantity if they are strings
-      let price = item.price;
-      if (typeof price === 'string') {
-        const cleaned = price.replace(/[^0-9.-]/g, '');
-        price = parseFloat(cleaned);
-      }
+      let price = typeof item.price === 'string'
+        ? parseFloat(item.price.replace(/[^0-9.-]/g, ''))
+        : item.price;
 
-      let quantity = item.quantity ?? 1;
+      let quantity = item.quantity ?? undefined;
       if (typeof quantity === 'string') {
-        const cleaned = quantity.replace(/[^0-9.]/g, '');
-        quantity = parseFloat(cleaned) || 1;
+        quantity = parseFloat(quantity.replace(/[^0-9.]/g, '')) || undefined;
       }
 
       return {
         name: typeof item.name === 'string' ? item.name.trim() : '',
         price: Number.isFinite(price) ? price : 0,
-        quantity: Number.isFinite(quantity) ? quantity : 1
+        ...(quantity != null && { quantity })
       };
     })
-    .filter((item: ParsedLineItem) =>
-      item.name.length > 0 && item.price !== 0
-    );
+    .filter((item: ParsedLineItem) => item.name.length > 0 && item.price > 0);
 
   if (lineItems.length === 0) return null;
 
   const computedTotal = lineItems.reduce((sum: number, i: ParsedLineItem) => sum + i.price, 0);
-  const reportedTotal = typeof parsed.total === 'number' ? parsed.total : computedTotal;
+  const reportedTotal = typeof parsed.total === 'number' && parsed.total > 0
+    ? parsed.total
+    : computedTotal;
 
-  // ── Enhanced validation checks ──
-  const subtotalOrTotal = parsed.subtotal ?? parsed.total ?? computedTotal;
+  const surcharge = typeof parsed.surcharge === 'number' && parsed.surcharge > 0
+    ? parsed.surcharge
+    : undefined;
 
-  // Check 1: Do items roughly add up?
-  if (subtotalOrTotal > 0 && computedTotal > 0) {
-    const ratio = computedTotal / subtotalOrTotal;
+  // Validation: do items add up?
+  const expectedSubtotal = parsed.subtotal ?? (surcharge ? reportedTotal - surcharge : reportedTotal);
+  if (expectedSubtotal > 0 && computedTotal > 0) {
+    const ratio = computedTotal / expectedSubtotal;
     if (ratio < 0.5 || ratio > 2.0) {
-      const warning = `Item sum ($${computedTotal.toFixed(2)}) differs significantly from receipt total ($${subtotalOrTotal.toFixed(2)})`;
-      console.warn(`⚠️ ${warning}`);
-      validationWarnings.push(warning);
+      validationWarnings.push(`Item sum ($${computedTotal.toFixed(2)}) differs significantly from receipt total ($${expectedSubtotal.toFixed(2)}) — some items may be missing`);
     } else if (ratio < 0.8 || ratio > 1.2) {
-      validationWarnings.push('Minor discrepancy between item sum and total');
+      validationWarnings.push('Minor discrepancy between item sum and total — check items');
     }
   }
 
-  // Check 2: Is merchant name valid?
-  if (!parsed.merchant || parsed.merchant === 'Receipt' || parsed.merchant.length < 2) {
+  if (!parsed.merchant || parsed.merchant.length < 2) {
     validationWarnings.push('Merchant name unclear');
   }
 
-  // Check 3: Is date valid?
-  if (!parsed.date || parsed.date === '') {
+  if (!parsed.date) {
     validationWarnings.push('Date not detected');
-  } else {
-    // Validate date format
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dateRegex.test(parsed.date)) {
-      validationWarnings.push('Date format may be incorrect');
-    }
+  } else if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) {
+    validationWarnings.push('Date format may be incorrect');
   }
 
-  // Check 4: Are amounts reasonable?
   if (reportedTotal > 10000) {
-    validationWarnings.push('Unusually high total - please verify');
+    validationWarnings.push('Unusually high total — please verify');
   }
 
-  if (reportedTotal < 0.01) {
-    validationWarnings.push('Total is too low');
-  }
-
-  // Check 5: Tax validation
-  if (parsed.tax && parsed.subtotal) {
-    const expectedTaxRatio = parsed.tax / parsed.subtotal;
-    if (expectedTaxRatio > 0.25 || expectedTaxRatio < 0.01) {
-      validationWarnings.push('Tax amount seems unusual');
-    }
-  }
-
-  // Check 6: Line items validation
-  const suspiciousItems = lineItems.filter(item =>
-    item.price > reportedTotal ||
-    item.price < 0.01 ||
-    item.quantity > 100
-  );
+  const suspiciousItems = lineItems.filter(item => item.price > reportedTotal || (item.quantity ?? 1) > 100);
   if (suspiciousItems.length > 0) {
     validationWarnings.push(`${suspiciousItems.length} item(s) have unusual prices or quantities`);
   }
 
-  // Validate time format (HH:MM, 24-hour)
+  // Validate time format
   let time: string | undefined;
   if (parsed.time && typeof parsed.time === 'string') {
-    const timeMatch = parsed.time.match(/^(\d{1,2}):(\d{2})$/);
-    if (timeMatch) {
-      const h = parseInt(timeMatch[1], 10);
-      const m = parseInt(timeMatch[2], 10);
+    const match = parsed.time.match(/^(\d{1,2}):(\d{2})$/);
+    if (match) {
+      const h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
       if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
         time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
       }
@@ -399,7 +329,7 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
     date: parsed.date || '',
     time,
     subtotal: typeof parsed.subtotal === 'number' ? parsed.subtotal : undefined,
-    tax: typeof parsed.tax === 'number' ? parsed.tax : undefined,
+    surcharge,
     total: reportedTotal,
     lineItems,
     rawOcrText,
@@ -407,27 +337,26 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
   };
 }
 
-// ─── Regex Fallback Parser — FALLBACK 2 ─────────────────────────────
-// Used when both Gemini paths fail. Decent but not as smart.
+// ─── Regex Fallback (FALLBACK 2) ─────────────────────────────────────
+// Used only when both Gemini paths fail.
 
-const totalKeywords = ['total', 'amount due', 'balance due', 'grand total', 'amount'];
+const totalKeywords = ['total', 'amount due', 'balance due', 'grand total'];
 const subtotalKeywords = ['subtotal', 'sub total', 'sub-total'];
-const taxKeywords = ['tax', 'gst', 'vat', 'service charge', 'surcharge'];
+const surchargeKeywords = ['surcharge', 'holiday surcharge', 'weekend surcharge', 'service charge'];
 const skipKeywords = [
-  'visa', 'mastercard', 'eftpos', 'cash', 'change', 'card', 'payment',
+  'visa', 'mastercard', 'eftpos', 'paywave', 'cash', 'change', 'card', 'payment',
   'abn', 'phone', 'tel', 'fax', 'table', 'order', 'server', 'cashier',
-  'thank', 'welcome', 'loyalty', 'points', 'member',
+  'thank', 'welcome', 'loyalty', 'points', 'member', 'incl. gst', 'gst component',
   'www.', 'http', '.com', '.au', 'wifi', 'password'
 ];
 
 const priceRegex = /\$?\s*(-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2}))\s*(?:[A-Z*])?\s*$/i;
 const quantityRegex = /^(\d+)\s*[xX×]\s*/;
-const productCodeRegex = /^\d{4,8}\s+/; // Handles 4-8 digit codes at start (e.g. ALDI: 516268, IKEA: 30482355, Costco: 12345678)
+const productCodeRegex = /^\d{4,8}\s+/;
 
 const dateRegexes = [
   /\b(\d{4})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/,
-  /\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](\\d{2,4})\b/,
-  /\b(0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])[-/.](\\d{2,4})\b/
+  /\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](\\d{2,4})\b/
 ];
 
 function normalizePrice(value: string) {
@@ -448,7 +377,7 @@ function normalizePrice(value: string) {
 
 function lineHasKeyword(line: string, keywords: string[]) {
   const lowered = line.toLowerCase();
-  return keywords.some((keyword) => lowered.includes(keyword));
+  return keywords.some((k) => lowered.includes(k));
 }
 
 function parseDate(text: string) {
@@ -456,43 +385,26 @@ function parseDate(text: string) {
     const match = text.match(regex);
     if (!match) continue;
     if (match[1].length === 4) {
-      const year = match[1];
-      const month = match[2].padStart(2, '0');
-      const day = match[3].padStart(2, '0');
-      return `${year}-${month}-${day}`;
+      return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
     }
-    const a = match[1].padStart(2, '0');
-    const b = match[2].padStart(2, '0');
-    const rawYear = match[3];
-    const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
-    return `${year}-${b}-${a}`;
+    const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+    return `${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
   }
   return '';
 }
 
-const timeRegexes = [
-  /\btime[:\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:([ap]m?))?/i,
-  /\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]m)\b/i,
-  /\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b/
-];
+const timeRegex = /\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]m?)?\b/i;
 
 function parseTime(text: string): string {
-  for (const regex of timeRegexes) {
-    const match = text.match(regex);
-    if (!match) continue;
-    let h = parseInt(match[1], 10);
-    const m = parseInt(match[2], 10);
-    const ampm = match[4]?.toLowerCase();
-
-    if (ampm === 'pm' || ampm === 'p') {
-      if (h < 12) h += 12;
-    } else if (ampm === 'am' || ampm === 'a') {
-      if (h === 12) h = 0;
-    }
-
-    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
-      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    }
+  const match = text.match(timeRegex);
+  if (!match) return '';
+  let h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  const ampm = match[4]?.toLowerCase();
+  if (ampm === 'pm' || ampm === 'p') { if (h < 12) h += 12; }
+  else if (ampm === 'am' || ampm === 'a') { if (h === 12) h = 0; }
+  if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
   return '';
 }
@@ -500,16 +412,12 @@ function parseTime(text: string): string {
 function parseReceiptFallback(text: string): ParsedReceipt {
   const rawLines = text.split('\n').map((l) => l.trim()).filter(Boolean);
 
-  // Merge split lines (Vision API puts names and prices on separate lines)
-  // Updated: Allow price lines that might have extra spaces or flags
+  // Merge name lines followed by price-only lines
   const priceOnlyRe = /^\s*\$?\s*-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})\s*(?:[A-Z*])?\s*$/i;
   const lines: string[] = [];
-
   for (let i = 0; i < rawLines.length; i++) {
     const cur = rawLines[i];
     const nxt = rawLines[i + 1];
-
-    // Check if current line is text and next line is just a price
     if (nxt && !priceOnlyRe.test(cur) && /[A-Za-z0-9]/.test(cur) && priceOnlyRe.test(nxt)) {
       lines.push(`${cur} ${nxt}`);
       i++;
@@ -519,8 +427,7 @@ function parseReceiptFallback(text: string): ParsedReceipt {
   }
 
   const merchant = lines.find((line) => {
-    if (line.length < 3) return false;
-    if (/^\d+$/.test(line)) return false;
+    if (line.length < 3 || /^\d+$/.test(line)) return false;
     if (/^\d+\s+(st|rd|th|ave|blvd|street|road|drive)/i.test(line)) return false;
     if (/^(abn|phone|tel|fax)/i.test(line)) return false;
     return /[A-Za-z]{2,}/.test(line);
@@ -531,7 +438,7 @@ function parseReceiptFallback(text: string): ParsedReceipt {
 
   const items: ParsedLineItem[] = [];
   let subtotal: number | undefined;
-  let tax: number | undefined;
+  let surcharge: number | undefined;
   let total: number | undefined;
 
   for (const line of lines) {
@@ -550,32 +457,31 @@ function parseReceiptFallback(text: string): ParsedReceipt {
       total = price; continue;
     }
     if (lineHasKeyword(line, subtotalKeywords)) { subtotal = price; continue; }
-    if (lineHasKeyword(line, taxKeywords)) { tax = price; continue; }
+    if (lineHasKeyword(line, surchargeKeywords)) { surcharge = price; continue; }
 
-    let quantity = 1;
+    let quantity: number | undefined;
     const qtyMatch = label.match(quantityRegex);
     if (qtyMatch) {
       quantity = parseInt(qtyMatch[1], 10);
       label = label.replace(quantityRegex, '').trim();
     }
 
-    // Remove leading product codes from ALDI/IKEA/Costco (e.g. "516268 Doritos", "30482355 KALLAX")
     label = label.replace(productCodeRegex, '').trim();
-
     label = label.replace(/[.\-_]{3,}$/g, '').replace(/\s{2,}/g, ' ').trim();
+
     if (label.length >= 2) {
-      items.push({ name: label, price, quantity });
+      items.push({ name: label, price, ...(quantity != null && { quantity }) });
     }
   }
 
   const computedTotal = items.reduce((s, i) => s + i.price, 0);
 
   return {
-    merchant, date, time, subtotal, tax,
+    merchant, date, time, subtotal, surcharge,
     total: total ?? subtotal ?? computedTotal,
     lineItems: items,
     rawOcrText: text,
-    confidence: 0.5, // Lower confidence for regex-based parsing
+    confidence: 0.5,
     method: 'regex-fallback'
   };
 }
@@ -588,7 +494,7 @@ serve(async (req) => {
 
   try {
     if (!visionApiKey && !geminiApiKey) {
-      throw new Error('Missing VISION_API_KEY or GEMINI_API_KEY');
+      throw new Error('Missing VISION_API_KEY or GEMINI_API_KEY environment variable');
     }
 
     const { imagePath, imageUrl, imageBase64 } = await req.json();
@@ -604,33 +510,28 @@ serve(async (req) => {
     } else if (imagePath) {
       const { data, error } = await supabase.storage.from(bucket).download(imagePath);
       if (error) throw error;
-      const buffer = await data.arrayBuffer();
-      base64Content = arrayBufferToBase64(buffer);
+      base64Content = arrayBufferToBase64(await data.arrayBuffer());
     } else if (imageUrl) {
       const resp = await fetch(imageUrl);
-      if (!resp.ok) throw new Error('Failed to download image');
-      const buffer = await resp.arrayBuffer();
-      base64Content = arrayBufferToBase64(buffer);
+      if (!resp.ok) throw new Error('Failed to download image from URL');
+      base64Content = arrayBufferToBase64(await resp.arrayBuffer());
     }
 
     let parsed: ParsedReceipt | null = null;
 
-    // ── Step 2: PRIMARY — Gemini Vision (multimodal) ──
-    // Sends the image directly. Gemini sees layout, columns, alignment.
+    // ── Step 2: PRIMARY — Gemini Vision ──
     if (geminiApiKey) {
-      console.log('🔍 Attempting Gemini Vision (multimodal)...');
+      console.log('🔍 Attempting Gemini Vision...');
       parsed = await parseWithGeminiVision(base64Content);
       if (parsed) {
-        console.log(`✅ Gemini Vision: ${parsed.lineItems.length} items, total=$${parsed.total}`);
+        console.log(`✅ Gemini Vision: ${parsed.lineItems.length} items, total=$${parsed.total}, surcharge=$${parsed.surcharge ?? 0}`);
       }
     }
 
     // ── Step 3: FALLBACK 1 — Vision API text → Gemini text ──
     if (!parsed && visionApiKey) {
       console.log('⚡ Falling back to Vision API + Gemini text...');
-
       try {
-        // Add retry logic for Vision API
         const visionResp = await retryWithBackoff(async () => {
           const res = await fetch(
             `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`,
@@ -641,52 +542,36 @@ serve(async (req) => {
                 requests: [{
                   image: { content: base64Content },
                   features: [{ type: 'DOCUMENT_TEXT_DETECTION', maxResults: 1 }],
-                  imageContext: {
-                    languageHints: ['en'],
-                    textDetectionParams: { enableTextDetectionConfidenceScore: true }
-                  }
+                  imageContext: { languageHints: ['en'] }
                 }]
               }),
-              signal: AbortSignal.timeout(25000) // 25 second timeout
+              signal: AbortSignal.timeout(25000)
             }
           );
-
-          if (!res.ok) {
-            const errorText = await res.text();
-            console.error('Vision API error:', errorText);
-            throw new Error(`Vision API error: ${res.status}`);
-          }
-
+          if (!res.ok) throw new Error(`Vision API error: ${res.status}`);
           return res;
-        }, 2);
+        });
 
         const visionJson = await visionResp.json();
         const ocrText =
           visionJson?.responses?.[0]?.fullTextAnnotation?.text ??
-          visionJson?.responses?.[0]?.textAnnotations?.[0]?.description ??
-          '';
+          visionJson?.responses?.[0]?.textAnnotations?.[0]?.description ?? '';
 
         if (ocrText.trim()) {
-          // Try Gemini text
           parsed = await parseWithGeminiText(ocrText);
           if (parsed) {
-            console.log(`✅ Vision+Gemini text: ${parsed.lineItems.length} items (confidence: ${parsed.confidence})`);
-          }
-
-          // FALLBACK 2 — regex
-          if (!parsed) {
+            console.log(`✅ Vision+Gemini text: ${parsed.lineItems.length} items`);
+          } else {
             console.log('🔧 Using regex fallback...');
             parsed = parseReceiptFallback(ocrText);
-            console.log(`✅ Regex: ${parsed.lineItems.length} items (confidence: ${parsed.confidence})`);
+            console.log(`✅ Regex: ${parsed.lineItems.length} items`);
           }
         }
       } catch (error) {
-        console.error('Vision API failed after retries:', error);
-        // Continue to return whatever we have
+        console.error('Vision API failed:', classifyError(error));
       }
     }
 
-    // ── Step 4: Return ──
     const result = parsed ?? {
       merchant: 'Receipt',
       date: '',
@@ -695,28 +580,20 @@ serve(async (req) => {
       rawOcrText: '',
       confidence: 0,
       method: 'none',
-      validationWarnings: ['No OCR method succeeded']
+      validationWarnings: ['Could not read the receipt. Try a clearer, well-lit photo.']
     };
 
-    // Log final result for monitoring
-    console.log(`📊 OCR Complete:`, {
-      method: result.method,
-      confidence: result.confidence,
-      itemCount: result.lineItems.length,
-      total: result.total,
-      warnings: result.validationWarnings?.length ?? 0
-    });
+    console.log(`📊 OCR Complete: method=${result.method}, items=${result.lineItems.length}, total=${result.total}, surcharge=${result.surcharge ?? 0}, warnings=${result.validationWarnings?.length ?? 0}`);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
-  } catch (error) {
-    console.error('❌ OCR Handler Error:', error);
 
-    return new Response(JSON.stringify({
-      error: (error as Error).message,
-      details: error instanceof Error ? error.stack : 'Unknown error'
-    }), {
+  } catch (error) {
+    const message = classifyError(error);
+    console.error('❌ OCR Handler Error:', message);
+
+    return new Response(JSON.stringify({ error: message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });

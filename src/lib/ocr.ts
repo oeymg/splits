@@ -1,18 +1,19 @@
 import { isSupabaseConfigured, supabase } from './supabase';
 import { ReceiptDraft } from '../types';
 
-
 type OcrResponse = {
   merchant?: string;
   date?: string;
+  time?: string;
   total?: number;
   subtotal?: number;
-  tax?: number;
+  surcharge?: number;
   lineItems?: Array<{ name: string; price: number; quantity?: number }>;
   rawOcrText?: string;
   confidence?: number;
   method?: string;
   validationWarnings?: string[];
+  error?: string;
 };
 
 export async function runOcr({
@@ -28,40 +29,40 @@ export async function runOcr({
     throw new Error('No image provided. Please snap or pick a photo.');
   }
   if (!isSupabaseConfigured || !supabase) {
-    throw new Error('Supabase is not configured. Check your .env file has EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY.');
+    throw new Error('OCR is not configured. Check your environment variables.');
   }
 
-  // REMOVED TRY/CATCH to allow errors to be seen by the caller (App.tsx)
   const { data, error } = await supabase.functions.invoke<OcrResponse>('ocr-receipt', {
     body: { imagePath, imageUrl, imageBase64 }
   });
 
   if (error) {
-    console.error('OCR Function Error:', error);
-    throw new Error(`OCR Failed: ${error.message || JSON.stringify(error)}`);
+    // Surface user-friendly messages from the function if available
+    const msg = (error as any)?.context?.error || error.message || JSON.stringify(error);
+    throw new Error(msg);
   }
 
   if (!data) {
-    throw new Error('OCR returned no data');
+    throw new Error('OCR returned no data. Try again with a clearer photo.');
   }
 
-  // Log OCR metrics for debugging
+  // If the function returned an error field, surface it
+  if (data.error) {
+    throw new Error(data.error);
+  }
+
   console.log('OCR Result:', {
     method: data.method,
     confidence: data.confidence,
     itemCount: data.lineItems?.length ?? 0,
+    surcharge: data.surcharge ?? 0,
     warnings: data.validationWarnings?.length ?? 0
   });
 
-  // Show validation warnings if present
-  if (data.validationWarnings && data.validationWarnings.length > 0) {
-    console.warn('OCR Validation Warnings:', data.validationWarnings);
-  }
-
   const lineItems =
     data.lineItems?.map((item) => ({
-      id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      name: (item.quantity && item.quantity > 1) ? `${item.quantity}x ${item.name}` : item.name,
+      id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: item.quantity && item.quantity > 1 ? `${item.quantity}× ${item.name}` : item.name,
       price: item.price,
       allocatedTo: []
     })) ?? [];
@@ -69,9 +70,10 @@ export async function runOcr({
   return {
     merchant: data.merchant ?? '',
     date: data.date ?? new Date().toISOString().slice(0, 10),
+    time: data.time,
     total: Number.isFinite(data.total) ? (data.total as number) : 0,
     subtotal: data.subtotal,
-    tax: data.tax,
+    surcharge: data.surcharge,
     imageUri: imageUrl ?? undefined,
     rawOcrText: data.rawOcrText,
     confidence: data.confidence,

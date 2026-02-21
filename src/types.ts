@@ -49,6 +49,7 @@ export type ReceiptDraft = {
   total: number;
   subtotal?: number;
   tax?: number;
+  surcharge?: number;
   imageUri?: string;
   rawOcrText?: string;
   lineItems: LineItem[];
@@ -67,7 +68,7 @@ export type SettlementEntry = {
   person: Person;
   totalOwed: number;
   subtotal: number;
-  taxAndTip: number;
+  surcharge: number;
   isPayer: boolean;
   items: Array<{ name: string; price: number; splitCount: number }>;
 };
