@@ -61,35 +61,54 @@ const RESPONSE_SCHEMA = {
 // ─── Prompt ──────────────────────────────────────────────────────────
 const RECEIPT_PROMPT = `You are an expert Australian receipt parser.
 
-AUSTRALIAN CONTEXT (important):
-- GST (10%) is already INCLUDED in all displayed prices. Never extract it as a line item.
-- Lines like "Incl. GST $2.50" or "GST Component $2.50" are informational — skip them completely.
-- Weekend, public holiday, or service surcharges (e.g. "15% surcharge $4.50", "Public holiday surcharge $3.00") ARE real charges — put the dollar amount in the surcharge field.
-- Payment lines (EFTPOS, PayWave, Visa, Cash, Change) are NOT items — skip them.
-- Skip: ABN, addresses, phone numbers, "Thank you", loyalty points, order/table/server numbers.
+AUSTRALIAN CONTEXT:
+- GST (10%) is already INCLUDED in all displayed prices. Do not extract it as a line item.
+- Lines like "Incl. GST $2.50", "GST $2.50", or "GST Component" are informational only — skip entirely.
+- Weekend, public holiday, or service surcharges (e.g. "15% surcharge $4.50") ARE real charges — put the dollar amount in the surcharge field.
+
+SKIP THESE COMPLETELY — they are not items:
+- Payment method lines: EFTPOS, Visa, Mastercard, PayWave, Tap & Go, Contactless, Cash, Change, Refund
+- Currency indicators: Lines containing only "AUD" or starting with "AUD $"
+- Card detail lines: "Account: ****XXXX", "Auth:", "Approval:", "Reference:", "Transaction ID:", "Receipt #"
+- GST lines: "Incl. GST", "GST $", "GST Component", "Tax Invoice"
+- Rounding: "Cash rounding", "Rounding adjustment" (AU rounds to 5 cents)
+- Savings/loyalty: "You saved", "Member savings", "Points earned", "Rewards", "Discount", "Specials"
+- Receipt metadata: ABN, addresses, phone numbers, website URLs, "Thank you", "Guest copy", "Duplicate"
+- Order details: table number, seat number, server name, order number, docket number
+- Duplicate totals: if "TOTAL" appears twice, use only the last/largest one
 
 EXTRACTION RULES:
-- merchant: Business name (usually the largest or first text at the top).
-- date: YYYY-MM-DD. AU receipts use DD/MM/YYYY — convert accordingly.
-- time: HH:MM in 24-hour format. Null if not present.
-- lineItems: Extract EVERY item with a name and a price greater than zero.
-  - name: Descriptive name only — strip leading product/barcode codes (e.g. "516268 Doritos" → "Doritos", "30482355 KALLAX Shelf" → "KALLAX Shelf").
-  - price: The price as displayed (GST already included).
-  - quantity: Number of units if stated, otherwise omit.
-  - If a modifier follows an item (e.g. "Add Bacon $2.00"), append it to the item name (e.g. "Burger - Add Bacon"), price = modifier price only if it has its own price.
-  - "2x Flat White $8.00" → name="Flat White", price=8.00, quantity=2.
-  - If item name and price are on separate lines, merge them.
-- subtotal: Sum of items before surcharge, if shown. Null otherwise.
-- surcharge: Dollar amount of any surcharge (weekend, public holiday, service fee). Null if none.
-- total: The final amount charged.
+- merchant: Business name — usually the largest text at the very top. Not an address.
+- date: Output as YYYY-MM-DD. AU receipts use DD/MM/YYYY — convert correctly.
+- time: HH:MM in 24-hour format. Null if not found.
+- lineItems: Extract EVERY food, drink, or product line that has a name and price > 0.
+  - name: Clean descriptive name only. Strip leading product/barcode codes:
+    - "516268 Doritos" → "Doritos"
+    - "30482355 KALLAX Shelf unit 77x147cm" → "KALLAX Shelf unit 77x147cm"
+    - Keep measurements in IKEA names (e.g. "77x147cm").
+  - price: The TOTAL price for that line (e.g. "2x Coffee $8.00" → price=8.00, quantity=2).
+  - quantity: The number of units if explicitly stated (e.g. "Qty: 2", "2x", "× 2"). Omit if 1.
+  - Modifiers that follow an item on the next line with $0 (e.g. "No onion", "Extra shot"): append to item name, do NOT add as separate item.
+  - Modifiers with their own price (e.g. "Add Bacon $2.00"): append to item name, add price to item total OR list separately — your choice, but do not double-count.
+  - If item name and price appear on separate consecutive lines, merge them into one item.
+- subtotal: The pre-surcharge total of items, if explicitly labelled. Null otherwise.
+- surcharge: Dollar amount of any surcharge line (weekend, public holiday, service fee). Null if none.
+- total: The final amount the customer paid.
+
+QUANTITY GUIDANCE:
+- "2x Flat White 8.00" → name="Flat White", price=8.00, quantity=2 (price is the TOTAL for both)
+- "Flat White × 3  12.00" → name="Flat White", price=12.00, quantity=3
+- "Chicken Burger  18.00" (no quantity shown) → name="Chicken Burger", price=18.00 (omit quantity)
+- Do NOT split the total price — return the full line price as given
 
 VENUE HINTS:
-- Cafes/Restaurants: Look for food and drink items. Each has a name and price.
-- Supermarkets (Woolworths, Coles, Aldi, IGA): Strip leading product codes, ignore savings/specials lines.
-- IKEA: Strip 8-digit article codes, keep product names and measurements (e.g. "60x147 cm").
-- Bottle shops/Pubs: Alcohol items are valid line items.
+- Cafes/Restaurants: food and drink items only. Each line with an item name and price is a line item.
+- Supermarkets (Woolworths, Coles, Aldi, IGA): ignore savings, specials, points earned, member prices.
+- IKEA: strip 8-digit article codes; keep product name and dimensions.
+- Bottle shops/Pubs: alcohol products are valid items.
+- Petrol stations: fuel (e.g. "Unleaded 30.5L $1.89/L $57.65") is a valid item — name="Unleaded", price=total fuel cost.
 
-Extract all items accurately. The sum of lineItem prices should be close to the subtotal or total.`;
+The sum of all lineItem prices should be close to subtotal (or total if no surcharge). If it's off by more than 20%, you likely missed items or misread a price — re-examine.`;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 function arrayBufferToBase64(buffer: ArrayBuffer) {
@@ -497,7 +516,7 @@ serve(async (req) => {
       throw new Error('Missing VISION_API_KEY or GEMINI_API_KEY environment variable');
     }
 
-    const { imagePath, imageUrl, imageBase64 } = await req.json();
+    const { imagePath, imageUrl, imageBase64, mimeType = 'image/jpeg' } = await req.json();
     if (!imagePath && !imageUrl && !imageBase64) {
       throw new Error('imagePath, imageUrl, or imageBase64 is required');
     }
@@ -522,7 +541,7 @@ serve(async (req) => {
     // ── Step 2: PRIMARY — Gemini Vision ──
     if (geminiApiKey) {
       console.log('🔍 Attempting Gemini Vision...');
-      parsed = await parseWithGeminiVision(base64Content);
+      parsed = await parseWithGeminiVision(base64Content, mimeType);
       if (parsed) {
         console.log(`✅ Gemini Vision: ${parsed.lineItems.length} items, total=$${parsed.total}, surcharge=$${parsed.surcharge ?? 0}`);
       }

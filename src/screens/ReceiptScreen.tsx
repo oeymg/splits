@@ -143,7 +143,7 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
 
             // Step 2: Run OCR via Supabase Edge Function with enhanced image
             setStatusText('Extracting text with AI…');
-            const ocrPromise = runOcr({ imageBase64: preprocessed.base64 });
+            const ocrPromise = runOcr({ imageBase64: preprocessed.base64, mimeType: preprocessed.mimeType });
 
             // Step 3: Upload original in background
             uploadReceiptImage(uri).then((upload) => {
@@ -172,8 +172,10 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
             return;
         }
         const result = await ImagePicker.launchCameraAsync({
-            quality: 0.9,
+            mediaTypes: ['images'],
+            quality: 1,           // Let preprocessImageForOcr handle compression
             allowsEditing: false, // Don't crop — receipts are tall/narrow
+            exif: false,
         });
         if (result.canceled) return;
         await processImage(result.assets[0].uri);
@@ -188,8 +190,10 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
             }
         }
         const result = await ImagePicker.launchImageLibraryAsync({
-            quality: 0.9,
-            allowsEditing: false, // Don't crop — receipts are tall/narrow
+            mediaTypes: ['images'], // includes HEIC, JPEG, PNG, WEBP
+            quality: 1,             // Let preprocessImageForOcr handle compression
+            allowsEditing: false,   // Don't crop — receipts are tall/narrow
+            exif: false,
         });
         if (result.canceled) return;
         await processImage(result.assets[0].uri);

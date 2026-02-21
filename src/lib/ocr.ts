@@ -19,11 +19,13 @@ type OcrResponse = {
 export async function runOcr({
   imagePath,
   imageUrl,
-  imageBase64
+  imageBase64,
+  mimeType
 }: {
   imagePath?: string | null;
   imageUrl?: string | null;
   imageBase64?: string | null;
+  mimeType?: string;
 }): Promise<ReceiptDraft> {
   if (!imagePath && !imageUrl && !imageBase64) {
     throw new Error('No image provided. Please snap or pick a photo.');
@@ -33,7 +35,7 @@ export async function runOcr({
   }
 
   const { data, error } = await supabase.functions.invoke<OcrResponse>('ocr-receipt', {
-    body: { imagePath, imageUrl, imageBase64 }
+    body: { imagePath, imageUrl, imageBase64, mimeType: mimeType ?? 'image/jpeg' }
   });
 
   if (error) {
@@ -59,13 +61,20 @@ export async function runOcr({
     warnings: data.validationWarnings?.length ?? 0
   });
 
-  const lineItems =
-    data.lineItems?.map((item) => ({
+  // Expand multi-quantity items into individual line items so each can be
+  // assigned to a different person on the items screen.
+  // e.g. "2x Flat White $8.00" → two separate "Flat White $4.00" items.
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const lineItems = (data.lineItems ?? []).flatMap((item) => {
+    const qty = item.quantity && item.quantity > 1 ? item.quantity : 1;
+    const priceEach = round2(item.price / qty);
+    return Array.from({ length: qty }, () => ({
       id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      name: item.quantity && item.quantity > 1 ? `${item.quantity}× ${item.name}` : item.name,
-      price: item.price,
-      allocatedTo: []
-    })) ?? [];
+      name: item.name,
+      price: priceEach,
+      allocatedTo: [] as string[]
+    }));
+  });
 
   return {
     merchant: data.merchant ?? '',
