@@ -1,7 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     Animated,
     Easing,
+    Image,
     Pressable,
     SafeAreaView,
     ScrollView,
@@ -29,26 +30,110 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
     const summary = computeAllocationSummary(receipt.lineItems, people);
     const unassigned = summary.unassignedTotal;
 
+    const [imageExpanded, setImageExpanded] = useState(false);
+
     // Entrance animations
     const fadeAnim = useRef(new Animated.Value(0)).current;
-    const slideAnim = useRef(new Animated.Value(30)).current;
+    const slideAnim = useRef(new Animated.Value(60)).current;
+
+    // Per-item stagger animations
+    const itemAnimsRef = useRef<Map<string, { opacity: Animated.Value; translateY: Animated.Value; scale: Animated.Value }>>(new Map());
+    const mountedRef = useRef(false);
+
+    const getItemAnim = (id: string) => {
+        if (!itemAnimsRef.current.has(id)) {
+            itemAnimsRef.current.set(id, {
+                opacity: new Animated.Value(0),
+                translateY: new Animated.Value(22),
+                scale: new Animated.Value(0.88)
+            });
+        }
+        return itemAnimsRef.current.get(id)!;
+    };
 
     useEffect(() => {
         Animated.parallel([
             Animated.timing(fadeAnim, {
                 toValue: 1,
-                duration: 600,
+                duration: 350,
                 easing: Easing.out(Easing.quad),
                 useNativeDriver: true
             }),
             Animated.spring(slideAnim, {
                 toValue: 0,
-                tension: 50,
-                friction: 8,
+                tension: 70,
+                friction: 10,
                 useNativeDriver: true
             })
         ]).start();
     }, []);
+
+    // Stagger items in on mount
+    useEffect(() => {
+        if (receipt.lineItems.length === 0) return;
+        mountedRef.current = true;
+        Animated.stagger(
+            40,
+            receipt.lineItems.map((item) => {
+                const anim = getItemAnim(item.id);
+                return Animated.parallel([
+                    Animated.timing(anim.opacity, {
+                        toValue: 1,
+                        duration: 280,
+                        easing: Easing.out(Easing.quad),
+                        useNativeDriver: true
+                    }),
+                    Animated.spring(anim.translateY, {
+                        toValue: 0,
+                        tension: 90,
+                        friction: 11,
+                        useNativeDriver: true
+                    }),
+                    Animated.spring(anim.scale, {
+                        toValue: 1,
+                        tension: 90,
+                        friction: 11,
+                        useNativeDriver: true
+                    })
+                ]);
+            })
+        ).start();
+    }, []);
+
+    // Animate newly added items
+    useEffect(() => {
+        if (!mountedRef.current) return;
+        receipt.lineItems.forEach((item) => {
+            if (!itemAnimsRef.current.has(item.id)) {
+                const anim = getItemAnim(item.id);
+                Animated.parallel([
+                    Animated.timing(anim.opacity, {
+                        toValue: 1,
+                        duration: 280,
+                        easing: Easing.out(Easing.quad),
+                        useNativeDriver: true
+                    }),
+                    Animated.spring(anim.translateY, {
+                        toValue: 0,
+                        tension: 90,
+                        friction: 11,
+                        useNativeDriver: true
+                    }),
+                    Animated.spring(anim.scale, {
+                        toValue: 1,
+                        tension: 90,
+                        friction: 11,
+                        useNativeDriver: true
+                    })
+                ]).start();
+            }
+        });
+        // Clean up removed items
+        const currentIds = new Set(receipt.lineItems.map(i => i.id));
+        for (const id of itemAnimsRef.current.keys()) {
+            if (!currentIds.has(id)) itemAnimsRef.current.delete(id);
+        }
+    }, [receipt.lineItems]);
 
     const updateLineItem = (id: string, patch: Partial<LineItem>) => {
         setReceipt((prev) => ({
@@ -114,8 +199,8 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
                         transform: [{ translateY: slideAnim }]
                     }}
                 >
-                    <Text style={styles.title}>Who ate what? 🧾</Text>
-                    <Text style={styles.subtitle}>Tap names to claim items. Hit "All" to split something evenly!</Text>
+                    <Text style={styles.title}>Who owes what? 🧾</Text>
+                    <Text style={styles.subtitle}>Tap names to claim items. Hit "All" to split evenly!</Text>
                 </Animated.View>
 
                 <Animated.View
@@ -131,8 +216,42 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
                         </View>
                     ) : null}
 
-                {receipt.lineItems.map((item) => (
-                    <View key={item.id} style={styles.itemCard}>
+                    {receipt.imageUri ? (
+                        <View style={styles.receiptImageCard}>
+                            <Pressable
+                                style={styles.receiptImageToggle}
+                                onPress={() => setImageExpanded(prev => !prev)}
+                            >
+                                <Text style={styles.receiptImageToggleText}>
+                                    {imageExpanded ? '▲ Hide receipt' : '🧾 View receipt'}
+                                </Text>
+                            </Pressable>
+                            {imageExpanded ? (
+                                <ScrollView
+                                    style={styles.receiptImageScroll}
+                                    nestedScrollEnabled
+                                    showsVerticalScrollIndicator={false}
+                                >
+                                    <Image
+                                        source={{ uri: receipt.imageUri }}
+                                        style={styles.receiptImage}
+                                        resizeMode="contain"
+                                    />
+                                </ScrollView>
+                            ) : null}
+                        </View>
+                    ) : null}
+
+                {receipt.lineItems.map((item) => {
+                    const anim = getItemAnim(item.id);
+                    return (
+                    <Animated.View
+                        key={item.id}
+                        style={[
+                            styles.itemCard,
+                            { opacity: anim.opacity, transform: [{ translateY: anim.translateY }, { scale: anim.scale }] }
+                        ]}
+                    >
                         <View style={styles.itemRow}>
                             <TextInput
                                 style={styles.itemName}
@@ -182,8 +301,9 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
                                 <Text style={styles.allButtonText}>✨ All</Text>
                             </Pressable>
                         </View>
-                    </View>
-                ))}
+                    </Animated.View>
+                    );
+                })}
 
                 <Pressable style={styles.addItemButton} onPress={addLineItem}>
                     <Text style={styles.addItemText}>+ Add another item</Text>
@@ -459,5 +579,30 @@ const styles = StyleSheet.create({
         color: '#ffffff',
         fontSize: 16,
         fontWeight: '700'
-    }
+    },
+
+    receiptImageCard: {
+        backgroundColor: colors.bgCard,
+        borderRadius: borderRadius.xxl,
+        marginBottom: spacing.md,
+        overflow: 'hidden',
+        ...shadows.sm
+    },
+    receiptImageToggle: {
+        paddingVertical: spacing.md,
+        paddingHorizontal: spacing.lg,
+        alignItems: 'center',
+    },
+    receiptImageToggleText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: colors.primary,
+    },
+    receiptImageScroll: {
+        maxHeight: 480,
+    },
+    receiptImage: {
+        width: '100%',
+        height: 900,
+    },
 });

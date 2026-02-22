@@ -33,7 +33,7 @@ const SPLITS_BOX = SPLITS_FONT_SIZE * 2; // tall box, text centered inside via f
 
 const STEPS = [
     { emoji: '\u{1F4F8}', label: 'Snap', desc: 'Photo your receipt' },
-    { emoji: '\u{1F465}', label: 'Claim', desc: 'Tap what you ate' },
+    { emoji: '\u{1F465}', label: 'Claim', desc: "Tap what's yours" },
     { emoji: '\u26A1', label: 'Done', desc: 'Everyone pays up (hopefully)' },
 ];
 
@@ -503,7 +503,7 @@ export function WelcomeScreen({ onStart, onTryDemo, onPricing, onHome }: Props) 
                     <View style={[styles.whySection, styles.sectionSpacing]}>
                         <Text style={styles.whySectionTag}>WHY SPLITS</Text>
                         <Text style={styles.whyHeadline}>
-                            Less math.{`\n`}Less nagging.{`\n`}More meals.
+                            Less math.{`\n`}Less nagging.{`\n`}More money.
                         </Text>
 
                         <View style={styles.whyList}>
@@ -702,50 +702,50 @@ const styles = StyleSheet.create({
     // ── 1. Hero Section ──────────────────────
     heroSection: {
         ...sectionCardBase,
-        paddingTop: IS_SMALL_SCREEN ? 52 : 72,
-        paddingBottom: IS_SMALL_SCREEN ? 44 : 56,
+        paddingTop: IS_SMALL_SCREEN ? 72 : 104,
+        paddingBottom: IS_SMALL_SCREEN ? 64 : 84,
         alignItems: 'center',
         backgroundColor: colors.bgPrimary,
     },
     headline: {
-        fontSize: IS_SMALL_SCREEN ? 42 : 58,
+        fontSize: IS_SMALL_SCREEN ? 54 : 76,
         fontWeight: '900',
         color: colors.textMain,
         textAlign: 'center',
-        lineHeight: IS_SMALL_SCREEN ? 46 : 62,
-        letterSpacing: IS_SMALL_SCREEN ? -2 : -3,
-        marginBottom: spacing.lg,
+        lineHeight: IS_SMALL_SCREEN ? 58 : 82,
+        letterSpacing: IS_SMALL_SCREEN ? -2.5 : -4,
+        marginBottom: spacing.xl,
     },
     subtitle: {
-        fontSize: IS_SMALL_SCREEN ? 16 : 18,
+        fontSize: IS_SMALL_SCREEN ? 18 : 21,
         color: colors.textMuted,
         textAlign: 'center',
         fontWeight: '500',
-        marginBottom: IS_SMALL_SCREEN ? 28 : 40,
+        marginBottom: IS_SMALL_SCREEN ? 36 : 52,
     },
     ctaRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         flexWrap: 'wrap',
-        gap: 12,
+        gap: 14,
     },
     ctaPrimary: {
         alignItems: 'center',
         justifyContent: 'center',
         alignSelf: 'center',
         backgroundColor: colors.brandCoral,
-        paddingVertical: IS_SMALL_SCREEN ? 16 : 18,
-        paddingHorizontal: IS_SMALL_SCREEN ? 38 : 48,
+        paddingVertical: IS_SMALL_SCREEN ? 20 : 22,
+        paddingHorizontal: IS_SMALL_SCREEN ? 48 : 60,
         borderRadius: borderRadius.full,
         shadowColor: colors.brandCoral,
-        shadowOpacity: 0.3,
-        shadowRadius: 20,
-        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.35,
+        shadowRadius: 24,
+        shadowOffset: { width: 0, height: 10 },
         elevation: 6,
     },
     ctaPrimaryText: {
-        fontSize: 17,
+        fontSize: IS_SMALL_SCREEN ? 18 : 20,
         fontWeight: '800',
         color: '#ffffff',
         letterSpacing: 0.2,
@@ -985,14 +985,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         alignSelf: 'center',
         justifyContent: 'center',
-        paddingVertical: 16,
-        paddingHorizontal: 36,
+        paddingVertical: IS_SMALL_SCREEN ? 20 : 22,
+        paddingHorizontal: IS_SMALL_SCREEN ? 36 : 44,
         borderRadius: borderRadius.full,
         borderWidth: 1.5,
         borderColor: colors.textMain + '15',
     },
     ctaGhostText: {
-        fontSize: 17,
+        fontSize: IS_SMALL_SCREEN ? 18 : 20,
         fontWeight: '800',
         color: colors.textMain,
     },

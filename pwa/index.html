@@ -175,6 +175,7 @@
             <input id="receiptInput" type="file" accept="image/*" capture="environment" hidden />
           </div>
           <div class="receipt-preview" id="receiptPreview">No receipt yet</div>
+          <div class="scan-result" id="scanResult" style="display:none"></div>
           <div class="row">
             <label class="field">
               <span>Where were you?</span>
@@ -191,8 +192,8 @@
               <input id="subtotal" placeholder="0.00" />
             </label>
             <label class="field">
-              <span>Tax</span>
-              <input id="tax" placeholder="0.00" />
+              <span>Surcharge</span>
+              <input id="surcharge" placeholder="0.00" />
             </label>
             <label class="field">
               <span>Total</span>

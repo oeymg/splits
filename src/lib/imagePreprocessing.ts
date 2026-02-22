@@ -32,7 +32,7 @@ export async function preprocessImageForOcr(uri: string): Promise<{
   } catch (error) {
     console.error('Image preprocessing failed:', error);
 
-    // Fallback: try without resize — some HEIC URIs need a direct encode step first
+    // Fallback 1: try without resize — some HEIC URIs need a direct encode step first
     try {
       const fallback = await ImageManipulator.manipulateAsync(
         uri,
@@ -42,6 +42,26 @@ export async function preprocessImageForOcr(uri: string): Promise<{
       return { base64: fallback.base64 ?? null, uri: fallback.uri, mimeType: 'image/jpeg' };
     } catch (fallbackError) {
       console.error('Image preprocessing fallback also failed:', fallbackError);
+    }
+
+    // Fallback 2: fetch raw bytes and send as-is.
+    // Gemini Vision natively supports HEIC/HEIF so we don't need to decode it —
+    // this is the path that saves web users picking HEIC files in Chrome.
+    try {
+      const resp = await fetch(uri);
+      const blob = await resp.blob();
+      const detectedMime = blob.type || 'image/heic';
+      const buf = await blob.arrayBuffer();
+      const uint8 = new Uint8Array(buf);
+      // Build base64 in small chunks to avoid call stack overflow on large files
+      const CHUNK = 4096;
+      let binary = '';
+      for (let i = 0; i < uint8.length; i += CHUNK) {
+        binary += String.fromCharCode(...uint8.subarray(i, i + CHUNK));
+      }
+      return { base64: btoa(binary), uri, mimeType: detectedMime };
+    } catch (rawError) {
+      console.error('Raw byte fallback also failed:', rawError);
       return { base64: null, uri, mimeType: 'image/jpeg' };
     }
   }

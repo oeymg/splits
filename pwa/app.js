@@ -1,3 +1,6 @@
+const SUPABASE_URL = 'https://nztqbqybfeyvrwmjjndp.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56dHFicXliZmV5dnJ3bWpqbmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA1MTk5NDksImV4cCI6MjA4NjA5NTk0OX0.6p-vO-3FXnM1niIbA8z7_7dM08vvdH7ccrGeU-rszls';
+
 const state = {
   groupName: 'Friday Dinner',
   people: [
@@ -9,11 +12,13 @@ const state = {
   currentStep: 1,
   flowStarted: false,
   shareId: null,
+  stepDirection: 'forward',
+  animateItems: false,
   receipt: {
     merchant: '',
     date: new Date().toISOString().slice(0, 10),
     subtotal: 0,
-    tax: 0,
+    surcharge: 0,
     total: 0,
     imageUrl: '',
     lineItems: []
@@ -21,17 +26,17 @@ const state = {
 };
 
 const sampleReceipt = {
-  merchant: 'Sunset Diner',
+  merchant: 'The Local Cafe',
   date: new Date().toISOString().slice(0, 10),
   subtotal: 60,
-  tax: 5.4,
-  total: 65.4,
+  surcharge: 1.5,
+  total: 61.5,
   lineItems: [
-    { id: 'li-1', name: 'Burger', price: 18.5, allocatedTo: [] },
-    { id: 'li-2', name: 'Fries', price: 7.0, allocatedTo: [] },
-    { id: 'li-3', name: 'Salad', price: 14.0, allocatedTo: [] },
-    { id: 'li-4', name: 'Soda', price: 4.5, allocatedTo: [] },
-    { id: 'li-5', name: 'Pasta', price: 16.0, allocatedTo: [] }
+    { id: 'li-1', name: 'Smashed Avo', price: 18.5, allocatedTo: [] },
+    { id: 'li-2', name: 'Chips', price: 7.0, allocatedTo: [] },
+    { id: 'li-3', name: 'Caesar Salad', price: 14.0, allocatedTo: [] },
+    { id: 'li-4', name: 'Flat White', price: 4.5, allocatedTo: [] },
+    { id: 'li-5', name: 'Eggs Benedict', price: 16.0, allocatedTo: [] }
   ]
 };
 
@@ -57,7 +62,7 @@ const elements = {
   merchant: document.getElementById('merchant'),
   date: document.getElementById('date'),
   subtotal: document.getElementById('subtotal'),
-  tax: document.getElementById('tax'),
+  surcharge: document.getElementById('surcharge'),
   total: document.getElementById('total'),
   itemsList: document.getElementById('itemsList'),
   addItem: document.getElementById('addItem'),
@@ -73,7 +78,8 @@ const elements = {
   exportImage: document.getElementById('exportImage'),
   qrContainer: document.getElementById('qrContainer'),
   shareCard: document.getElementById('shareCard'),
-  processing: document.getElementById('processing')
+  processing: document.getElementById('processing'),
+  scanResult: document.getElementById('scanResult')
 };
 
 const stepLabels = [
@@ -87,9 +93,9 @@ const stepLabels = [
 const totalSteps = stepLabels.length;
 
 const formatCurrency = (amount) =>
-  new Intl.NumberFormat('en-US', {
+  new Intl.NumberFormat('en-AU', {
     style: 'currency',
-    currency: 'USD',
+    currency: 'AUD',
     minimumFractionDigits: 2
   }).format(Number.isFinite(amount) ? amount : 0);
 
@@ -369,6 +375,7 @@ function computeAllocation(lineItems, people) {
 
   let subtotal = 0;
   let unassigned = 0;
+  let assignedTotal = 0;
 
   lineItems.forEach((item) => {
     subtotal = round2(subtotal + item.price);
@@ -376,18 +383,20 @@ function computeAllocation(lineItems, people) {
       unassigned = round2(unassigned + item.price);
       return;
     }
+    assignedTotal = round2(assignedTotal + item.price);
     const split = item.price / item.allocatedTo.length;
     item.allocatedTo.forEach((userId) => {
       owed[userId] = round2((owed[userId] ?? 0) + split);
     });
   });
 
-  return { owed, subtotal, unassigned };
+  return { owed, subtotal, unassigned, assignedTotal };
 }
 
 function buildShareMessage() {
   const payer = state.people.find((p) => p.id === state.payerId);
-  const { owed } = computeAllocation(state.receipt.lineItems, state.people);
+  const { owed, assignedTotal } = computeAllocation(state.receipt.lineItems, state.people);
+  const surcharge = state.receipt.surcharge ?? 0;
 
   const lines = [];
   lines.push(`${state.groupName || 'Group'} · ${state.receipt.merchant || 'Receipt'}`);
@@ -401,8 +410,14 @@ function buildShareMessage() {
   state.people
     .filter((person) => person.id !== state.payerId)
     .forEach((person) => {
-      if ((owed[person.id] ?? 0) > 0) {
-        lines.push(`${person.name}: ${formatCurrency(owed[person.id])}`);
+      const personSubtotal = owed[person.id] ?? 0;
+      const personSurcharge =
+        surcharge > 0 && assignedTotal > 0
+          ? round2((personSubtotal / assignedTotal) * surcharge)
+          : 0;
+      const amount = round2(personSubtotal + personSurcharge);
+      if (amount > 0) {
+        lines.push(`${person.name}: ${formatCurrency(amount)}`);
       }
     });
   return lines.join('\n');
@@ -485,7 +500,7 @@ function renderReceipt() {
   elements.merchant.value = state.receipt.merchant;
   elements.date.value = state.receipt.date;
   elements.subtotal.value = state.receipt.subtotal ? state.receipt.subtotal.toString() : '';
-  elements.tax.value = state.receipt.tax ? state.receipt.tax.toString() : '';
+  elements.surcharge.value = state.receipt.surcharge ? state.receipt.surcharge.toString() : '';
   elements.total.value = state.receipt.total ? state.receipt.total.toString() : '';
 
   if (state.receipt.imageUrl) {
@@ -565,23 +580,34 @@ function renderItems() {
     return;
   }
 
+  const shouldCascade = state.animateItems;
+  state.animateItems = false;
+
   elements.itemsList.replaceChildren();
-  state.receipt.lineItems.forEach((item) => {
+  state.receipt.lineItems.forEach((item, index) => {
     const card = createItemCard(item);
+    if (shouldCascade) {
+      card.classList.add('cascade');
+      card.style.animationDelay = `${index * 55}ms`;
+    }
     elements.itemsList.appendChild(card);
   });
 }
 
 function renderSummary() {
-  const { owed, subtotal, unassigned } = computeAllocation(
+  const { owed, subtotal, unassigned, assignedTotal } = computeAllocation(
     state.receipt.lineItems,
     state.people
   );
+  const surcharge = state.receipt.surcharge ?? 0;
 
-  elements.itemsSummary.textContent = `Items subtotal: ${formatCurrency(subtotal)}`;
+  elements.itemsSummary.textContent =
+    `Items subtotal: ${formatCurrency(subtotal)}` +
+    (surcharge > 0 ? ` · Surcharge: ${formatCurrency(surcharge)}` : '');
 
+  const adjustedTotal = round2(subtotal + surcharge);
   const totalMismatch =
-    state.receipt.total > 0 && Math.abs(state.receipt.total - subtotal) > 0.01;
+    state.receipt.total > 0 && Math.abs(state.receipt.total - adjustedTotal) > 0.01;
   elements.itemsWarning.textContent = totalMismatch
     ? 'Totals mismatch. Update receipt total or line items.'
     : unassigned > 0
@@ -592,7 +618,12 @@ function renderSummary() {
   state.people
     .filter((person) => person.id !== state.payerId)
     .forEach((person) => {
-      const amount = owed[person.id] ?? 0;
+      const personSubtotal = owed[person.id] ?? 0;
+      const personSurcharge =
+        surcharge > 0 && assignedTotal > 0
+          ? round2((personSubtotal / assignedTotal) * surcharge)
+          : 0;
+      const amount = round2(personSubtotal + personSurcharge);
       const row = document.createElement('div');
       row.className = 'summary-row';
       const nameSpan = document.createElement('span');
@@ -673,7 +704,13 @@ function renderStepper() {
 function updateStepVisibility() {
   document.querySelectorAll('.step').forEach((section) => {
     const step = Number(section.dataset.step);
-    section.classList.toggle('active', step === state.currentStep);
+    const isActive = step === state.currentStep;
+    if (isActive) {
+      section.dataset.dir = state.stepDirection;
+      section.classList.add('active');
+    } else {
+      section.classList.remove('active');
+    }
   });
 
   document.querySelectorAll('[data-step-back]').forEach((button) => {
@@ -684,8 +721,9 @@ function updateStepVisibility() {
   });
 }
 
-function setStep(step) {
+function setStep(step, dir = 'forward') {
   state.currentStep = Math.min(Math.max(step, 1), totalSteps);
+  state.stepDirection = dir;
   renderStepper();
   updateStepVisibility();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -733,29 +771,182 @@ function loadSampleReceipt() {
     ...sampleReceipt,
     lineItems: sampleReceipt.lineItems.map((item) => ({ ...item, allocatedTo: [] }))
   };
+  renderScanResult(null);
   renderAll();
+}
+
+function renderScanResult(data) {
+  const el = elements.scanResult;
+  if (!el) return;
+
+  if (!data) {
+    el.style.display = 'none';
+    el.replaceChildren();
+    return;
+  }
+
+  const confidence = data.confidence ?? 0;
+  const confLabel = confidence >= 0.9 ? 'Excellent' : confidence >= 0.7 ? 'Good' : confidence >= 0.5 ? 'Fair' : 'Low';
+  const confClass = confidence >= 0.9 ? 'high' : confidence >= 0.7 ? 'good' : confidence >= 0.5 ? 'fair' : 'low';
+  const itemCount = (data.lineItems ?? []).length;
+
+  el.replaceChildren();
+
+  const header = document.createElement('div');
+  header.className = 'scan-result-header';
+
+  const title = document.createElement('span');
+  title.className = 'scan-result-title';
+  title.textContent = 'Scan result';
+  header.appendChild(title);
+
+  if (confidence > 0) {
+    const badge = document.createElement('span');
+    badge.className = `scan-confidence ${confClass}`;
+    badge.textContent = `${confLabel} (${Math.round(confidence * 100)}%)`;
+    header.appendChild(badge);
+  }
+
+  el.appendChild(header);
+
+  const rows = [
+    ['Merchant', data.merchant || '—'],
+    ['Date', data.date || '—'],
+    ['Items found', `${itemCount} item${itemCount !== 1 ? 's' : ''}`],
+    ...(data.surcharge ? [['Surcharge', formatCurrency(data.surcharge)]] : []),
+    ['Total', formatCurrency(data.total || 0)]
+  ];
+
+  rows.forEach(([label, value]) => {
+    const row = document.createElement('div');
+    row.className = 'scan-result-row';
+    const l = document.createElement('span');
+    l.textContent = label;
+    const v = document.createElement('strong');
+    v.textContent = value;
+    row.appendChild(l);
+    row.appendChild(v);
+    el.appendChild(row);
+  });
+
+  if (data.validationWarnings?.length) {
+    const box = document.createElement('div');
+    box.className = 'scan-warnings';
+    data.validationWarnings.forEach((w) => {
+      const p = document.createElement('p');
+      p.textContent = `⚠️ ${w}`;
+      box.appendChild(p);
+    });
+    el.appendChild(box);
+  }
+
+  el.style.display = 'block';
+}
+
+function animateScanSuccess(onComplete) {
+  const preview = elements.receiptPreview;
+  if (!preview) {
+    onComplete?.();
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'scan-success-overlay';
+
+  const icon = document.createElement('div');
+  icon.className = 'scan-success-icon';
+  icon.textContent = '✓';
+
+  const label = document.createElement('div');
+  label.className = 'scan-success-label';
+  label.textContent = 'Scanned!';
+
+  overlay.appendChild(icon);
+  overlay.appendChild(label);
+  preview.appendChild(overlay);
+
+  setTimeout(() => {
+    overlay.remove();
+    onComplete?.();
+  }, 1100);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Strip the data URL prefix (e.g. "data:image/jpeg;base64,")
+      const result = reader.result;
+      resolve(result.split(',')[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 async function handleFileInput(file) {
   if (!file) return;
   setProcessing(true);
 
-  const reader = new FileReader();
-  reader.onload = () => {
-    state.receipt.imageUrl = reader.result;
-    state.receipt.merchant = sampleReceipt.merchant;
-    state.receipt.date = sampleReceipt.date;
-    state.receipt.subtotal = sampleReceipt.subtotal;
-    state.receipt.tax = sampleReceipt.tax;
-    state.receipt.total = sampleReceipt.total;
-    state.receipt.lineItems = sampleReceipt.lineItems.map((item) => ({
-      ...item,
-      allocatedTo: []
-    }));
-    setProcessing(false);
+  // Show preview immediately
+  const objectUrl = URL.createObjectURL(file);
+  state.receipt.imageUrl = objectUrl;
+  renderReceipt();
+
+  try {
+    const base64 = await fileToBase64(file);
+    const mimeType = file.type || 'image/jpeg';
+
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/ocr-receipt`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+      },
+      body: JSON.stringify({ imageBase64: base64, mimeType })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OCR request failed (${response.status})`);
+    }
+
+    const data = await response.json();
+    if (data.error) throw new Error(data.error);
+
+    // Expand multi-quantity items so each can be assigned independently
+    const lineItems = (data.lineItems ?? []).flatMap((item) => {
+      const qty = item.quantity && item.quantity > 1 ? item.quantity : 1;
+      const priceEach = round2(item.price / qty);
+      return Array.from({ length: qty }, () => ({
+        id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: item.name,
+        price: priceEach,
+        allocatedTo: []
+      }));
+    });
+
+    state.receipt.merchant = data.merchant ?? '';
+    state.receipt.date = data.date ?? new Date().toISOString().slice(0, 10);
+    state.receipt.subtotal = data.subtotal ?? 0;
+    state.receipt.surcharge = data.surcharge ?? 0;
+    state.receipt.total = Number.isFinite(data.total) ? data.total : 0;
+    state.receipt.lineItems = lineItems;
+
     renderAll();
-  };
-  reader.readAsDataURL(file);
+    renderScanResult(data);
+    showToast('Receipt scanned!');
+    animateScanSuccess(() => {
+      state.animateItems = true;
+      renderItems();
+      setStep(3, 'forward');
+    });
+  } catch (err) {
+    console.error('OCR failed:', err);
+    renderScanResult(null);
+    showToast('Could not scan receipt — fill in items manually.');
+  } finally {
+    setProcessing(false);
+  }
 }
 
 function attachListeners() {
@@ -791,8 +982,9 @@ function attachListeners() {
   elements.subtotal.addEventListener('input', (event) => {
     state.receipt.subtotal = Number.parseFloat(event.target.value || '0') || 0;
   });
-  elements.tax.addEventListener('input', (event) => {
-    state.receipt.tax = Number.parseFloat(event.target.value || '0') || 0;
+  elements.surcharge.addEventListener('input', (event) => {
+    state.receipt.surcharge = Number.parseFloat(event.target.value || '0') || 0;
+    renderSummary();
   });
   elements.total.addEventListener('input', (event) => {
     state.receipt.total = Number.parseFloat(event.target.value || '0') || 0;
@@ -911,7 +1103,7 @@ function attachListeners() {
   document.querySelectorAll('[data-step-back]').forEach((button) => {
     button.addEventListener('click', () => {
       if (state.currentStep <= 1) return;
-      setStep(state.currentStep - 1);
+      setStep(state.currentStep - 1, 'back');
     });
   });
 }

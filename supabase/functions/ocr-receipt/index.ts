@@ -30,9 +30,7 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false }
 });
 
-// ─── Structured Output Schema ────────────────────────────────────────
-// Guarantees Gemini always returns valid JSON matching this shape.
-// No markdown wrapping, no JSON.parse failures.
+// ─── Structured Output Schema ─────────────────────────────────────────
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -59,56 +57,65 @@ const RESPONSE_SCHEMA = {
 };
 
 // ─── Prompt ──────────────────────────────────────────────────────────
-const RECEIPT_PROMPT = `You are an expert Australian receipt parser.
+const RECEIPT_PROMPT = `You are a precise Australian receipt parser for a bill-splitting app.
 
-AUSTRALIAN CONTEXT:
-- GST (10%) is already INCLUDED in all displayed prices. Do not extract it as a line item.
-- Lines like "Incl. GST $2.50", "GST $2.50", or "GST Component" are informational only — skip entirely.
-- Weekend, public holiday, or service surcharges (e.g. "15% surcharge $4.50") ARE real charges — put the dollar amount in the surcharge field.
+YOUR JOB: Extract only the ordered food/drink/products and the final amounts. Nothing else.
 
-SKIP THESE COMPLETELY — they are not items:
-- Payment method lines: EFTPOS, Visa, Mastercard, PayWave, Tap & Go, Contactless, Cash, Change, Refund
-- Currency indicators: Lines containing only "AUD" or starting with "AUD $"
-- Card detail lines: "Account: ****XXXX", "Auth:", "Approval:", "Reference:", "Transaction ID:", "Receipt #"
-- GST lines: "Incl. GST", "GST $", "GST Component", "Tax Invoice"
-- Rounding: "Cash rounding", "Rounding adjustment" (AU rounds to 5 cents)
-- Savings/loyalty: "You saved", "Member savings", "Points earned", "Rewards", "Discount", "Specials"
-- Receipt metadata: ABN, addresses, phone numbers, website URLs, "Thank you", "Guest copy", "Duplicate"
-- Order details: table number, seat number, server name, order number, docket number
-- Duplicate totals: if "TOTAL" appears twice, use only the last/largest one
+══ NEVER EXTRACT THESE (skip the entire line) ══
+• Payment: EFTPOS, Visa, Mastercard, PayWave, Contactless, Tap & Go, Cash, Change, Refund, APPROVED, Signature
+• AUD lines: anything that is just "AUD", "AUD $XX.XX", or starts with "AUD " without a product name
+• Card details: Auth:, Approval:, Reference:, Transaction ID:, Receipt #, Account: ****XXXX, RRN:
+• GST lines: "Incl. GST", "GST $X.XX", "GST Component", "Tax Invoice" header, "ABN XX XXX XXX XXX"
+• Rounding: "Cash rounding", "Rounding adjustment" (AU rounds to 5c)
+• Loyalty/savings: "You saved", "Member savings", "Points earned", "Rewards", "Member price", "Special", "Discount applied"
+• Receipt metadata: store address, phone, website URL, "Thank you", "Please come again", "Guest copy", "Duplicate", "VOID", "NO SALE"
+• Order info: table number, seat, server name, order number, docket number, covers, terminal ID
+• Duplicate totals: receipts sometimes print TOTAL twice — use only the final/largest value
 
-EXTRACTION RULES:
-- merchant: Business name — usually the largest text at the very top. Not an address.
-- date: Output as YYYY-MM-DD. AU receipts use DD/MM/YYYY — convert correctly.
-- time: HH:MM in 24-hour format. Null if not found.
-- lineItems: Extract EVERY food, drink, or product line that has a name and price > 0.
-  - name: Clean descriptive name only. Strip leading product/barcode codes:
-    - "516268 Doritos" → "Doritos"
-    - "30482355 KALLAX Shelf unit 77x147cm" → "KALLAX Shelf unit 77x147cm"
-    - Keep measurements in IKEA names (e.g. "77x147cm").
-  - price: The TOTAL price for that line (e.g. "2x Coffee $8.00" → price=8.00, quantity=2).
-  - quantity: The number of units if explicitly stated (e.g. "Qty: 2", "2x", "× 2"). Omit if 1.
-  - Modifiers that follow an item on the next line with $0 (e.g. "No onion", "Extra shot"): append to item name, do NOT add as separate item.
-  - Modifiers with their own price (e.g. "Add Bacon $2.00"): append to item name, add price to item total OR list separately — your choice, but do not double-count.
-  - If item name and price appear on separate consecutive lines, merge them into one item.
-- subtotal: The pre-surcharge total of items, if explicitly labelled. Null otherwise.
-- surcharge: Dollar amount of any surcharge line (weekend, public holiday, service fee). Null if none.
-- total: The final amount the customer paid.
+══ EXTRACTION RULES ══
 
-QUANTITY GUIDANCE:
-- "2x Flat White 8.00" → name="Flat White", price=8.00, quantity=2 (price is the TOTAL for both)
-- "Flat White × 3  12.00" → name="Flat White", price=12.00, quantity=3
-- "Chicken Burger  18.00" (no quantity shown) → name="Chicken Burger", price=18.00 (omit quantity)
-- Do NOT split the total price — return the full line price as given
+merchant: The business trading name — usually the LARGEST text at the very top. Skip if it is an address, ABN, phone number, or "TAX INVOICE".
+
+date: Output YYYY-MM-DD. AU receipts write DD/MM/YYYY — convert carefully (e.g. "15/03/2025" → "2025-03-15").
+
+time: 24-hour HH:MM. Null if absent.
+
+lineItems — EVERY ordered item with a price > 0:
+  name: Clean, human-readable name only.
+    • Strip leading barcode/article codes: "30482355 KALLAX Shelf 77x147cm" → "KALLAX Shelf 77x147cm"
+    • Strip leading product codes: "516268 Doritos" → "Doritos"
+    • Keep IKEA dimensions (e.g. "77x147cm").
+    • Strip trailing dot leaders: "Flat White ......... 4.50" → "Flat White"
+    • $0 modifier lines (e.g. "  No sugar", "  Extra ice"): APPEND to the previous item name; do NOT add as a separate item.
+    • Modifiers WITH a price (e.g. "+ Extra shot $1.00"): include in the parent item name and ADD to the parent price. Do not list as a separate line item.
+  price: The TOTAL price for the line as printed.
+    • "2x Flat White $8.00" → price=8.00, quantity=2 (do NOT divide — $8.00 is already the line total)
+    • "Flat White $4.50 × 3" → price=13.50 (multiply: 4.50×3), quantity=3
+    • "Chips 3.00" → price=3.00 (no quantity)
+    • "Unleaded 30.5L @ $1.89/L $57.65" → name="Unleaded 30.5L", price=57.65 (use the dollar total, not the per-litre rate)
+  quantity: Integer > 1 only when quantity is EXPLICITLY printed (e.g. "2x", "Qty 3", "× 2"). Omit if 1.
+    • "Nuggets (6 piece)" → this is a portion description, NOT a quantity. Omit quantity.
+    • "Family Serve" → NOT a quantity.
+
+MULTI-LINE ITEMS: If item name is on one line and its price is on the very next line alone, merge them into a single item.
+
+subtotal: Pre-surcharge item total, if explicitly labelled "Subtotal" or "Sub-total". Null otherwise.
+
+surcharge: Dollar amount of any merchant-added surcharge (weekend, public holiday, service fee, credit card fee).
+  • "15% weekend surcharge $6.75" → surcharge=6.75
+  • "Service fee 10% $4.50" → surcharge=4.50
+  • Null if no surcharge.
+
+total: The FINAL amount the customer paid. If printed multiple times, use the last occurrence or the largest value that is less than double the item sum.
+
+SELF-CHECK: Sum your lineItem prices. If the sum is more than 25% away from subtotal (or total if no surcharge), you missed items or misread a price — look again before finalising.
 
 VENUE HINTS:
-- Cafes/Restaurants: food and drink items only. Each line with an item name and price is a line item.
-- Supermarkets (Woolworths, Coles, Aldi, IGA): ignore savings, specials, points earned, member prices.
-- IKEA: strip 8-digit article codes; keep product name and dimensions.
-- Bottle shops/Pubs: alcohol products are valid items.
-- Petrol stations: fuel (e.g. "Unleaded 30.5L $1.89/L $57.65") is a valid item — name="Unleaded", price=total fuel cost.
-
-The sum of all lineItem prices should be close to subtotal (or total if no surcharge). If it's off by more than 20%, you likely missed items or misread a price — re-examine.`;
+• Café / restaurant: every food and drink line with a price is a line item.
+• Woolworths / Coles / Aldi / IGA: skip "Savings", "Specials", "Points earned", "Member price" lines.
+• IKEA: strip 8-digit article codes; keep product name with dimensions.
+• Bottle shop / pub: alcohol and snacks are valid items.
+• Petrol station: fuel lines are items — use the dollar total (not the per-litre rate).`;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 function arrayBufferToBase64(buffer: ArrayBuffer) {
@@ -118,12 +125,28 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
   return btoa(binary);
 }
 
+// Classify whether an error is transient and worth retrying
+function isTransientError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return (
+    msg.includes('429') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.toLowerCase().includes('rate limit') ||
+    msg.toLowerCase().includes('quota') ||
+    msg.toLowerCase().includes('unavailable') ||
+    msg.toLowerCase().includes('timeout') ||
+    msg.toLowerCase().includes('network')
+  );
+}
+
 function classifyError(error: unknown): string {
   const msg = error instanceof Error ? error.message : String(error);
   if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('rate limit')) {
     return 'OCR is busy right now — wait a moment and try again.';
   }
-  if (msg.includes('503') || msg.toLowerCase().includes('unavailable')) {
+  if (msg.includes('503') || msg.includes('502') || msg.toLowerCase().includes('unavailable')) {
     return 'OCR service is temporarily unavailable. Try again shortly.';
   }
   if (msg.includes('413') || msg.toLowerCase().includes('too large')) {
@@ -138,7 +161,7 @@ function classifyError(error: unknown): string {
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   maxRetries = 2,
-  baseDelay = 1000
+  baseDelay = 800
 ): Promise<T> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -146,9 +169,11 @@ async function retryWithBackoff<T>(
       return await fn();
     } catch (error) {
       lastError = error as Error;
+      // Don't retry permanent errors (bad request, too large, etc.)
+      if (!isTransientError(error)) throw error;
       if (attempt === maxRetries - 1) break;
       const delay = baseDelay * Math.pow(2, attempt);
-      console.warn(`Attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
+      console.warn(`Attempt ${attempt + 1} failed (transient), retrying in ${delay}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -156,11 +181,14 @@ async function retryWithBackoff<T>(
 }
 
 // ─── Gemini Vision (PRIMARY) ─────────────────────────────────────────
-// Sends the image directly. Gemini sees layout, columns, and alignment.
-// Uses structured output — guaranteed valid JSON, no parsing failures.
-
 async function parseWithGeminiVision(base64Image: string, mimeType = 'image/jpeg'): Promise<ParsedReceipt | null> {
   if (!geminiApiKey) return null;
+
+  // Rough size guard: base64 of ~3.5 MB raw image ≈ 4.7 MB string. Gemini limit is ~20MB inline but
+  // very large images slow down processing significantly.
+  if (base64Image.length > 6_000_000) {
+    console.warn(`Image is large (${(base64Image.length / 1_000_000).toFixed(1)}MB base64) — may be slow`);
+  }
 
   try {
     const response = await retryWithBackoff(async () => {
@@ -177,13 +205,13 @@ async function parseWithGeminiVision(base64Image: string, mimeType = 'image/jpeg
               ]
             }],
             generationConfig: {
-              temperature: 0.1,
-              maxOutputTokens: 4096,
+              temperature: 0,        // Zero temperature for deterministic extraction
+              maxOutputTokens: 2048, // Sufficient for any realistic receipt
               responseMimeType: 'application/json',
               responseSchema: RESPONSE_SCHEMA
             }
           }),
-          signal: AbortSignal.timeout(30000)
+          signal: AbortSignal.timeout(35000)
         }
       );
 
@@ -199,7 +227,6 @@ async function parseWithGeminiVision(base64Image: string, mimeType = 'image/jpeg
     const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
     if (!text) return null;
 
-    // With structured output, text is guaranteed valid JSON — no cleaning needed
     const parsed = JSON.parse(text);
     const result = validateAndBuild(parsed, '');
     if (result) {
@@ -214,8 +241,6 @@ async function parseWithGeminiVision(base64Image: string, mimeType = 'image/jpeg
 }
 
 // ─── Gemini Text Parser (FALLBACK 1) ─────────────────────────────────
-// Used when image is unavailable. Sends raw OCR text from Vision API.
-
 async function parseWithGeminiText(ocrText: string): Promise<ParsedReceipt | null> {
   if (!geminiApiKey) return null;
 
@@ -231,13 +256,13 @@ async function parseWithGeminiText(ocrText: string): Promise<ParsedReceipt | nul
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
-              temperature: 0.1,
-              maxOutputTokens: 2048,
+              temperature: 0,
+              maxOutputTokens: 1536,
               responseMimeType: 'application/json',
               responseSchema: RESPONSE_SCHEMA
             }
           }),
-          signal: AbortSignal.timeout(20000)
+          signal: AbortSignal.timeout(25000)
         }
       );
 
@@ -266,7 +291,6 @@ async function parseWithGeminiText(ocrText: string): Promise<ParsedReceipt | nul
 }
 
 // ─── Validation & Builder ────────────────────────────────────────────
-
 function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null {
   const validationWarnings: string[] = [];
 
@@ -280,10 +304,19 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
       if (typeof quantity === 'string') {
         quantity = parseFloat(quantity.replace(/[^0-9.]/g, '')) || undefined;
       }
+      // Guard: quantity must be a reasonable positive integer
+      if (quantity != null && (!Number.isInteger(quantity) || quantity < 2 || quantity > 99)) {
+        quantity = undefined;
+      }
+
+      // Clean up item name — strip trailing dots and extra whitespace
+      const name = typeof item.name === 'string'
+        ? item.name.trim().replace(/[.\-_]{3,}$/, '').replace(/\s{2,}/g, ' ').trim()
+        : '';
 
       return {
-        name: typeof item.name === 'string' ? item.name.trim() : '',
-        price: Number.isFinite(price) ? price : 0,
+        name,
+        price: Number.isFinite(price) ? Math.round(price * 100) / 100 : 0,
         ...(quantity != null && { quantity })
       };
     })
@@ -293,26 +326,38 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
 
   const computedTotal = lineItems.reduce((sum: number, i: ParsedLineItem) => sum + i.price, 0);
   const reportedTotal = typeof parsed.total === 'number' && parsed.total > 0
-    ? parsed.total
-    : computedTotal;
+    ? Math.round(parsed.total * 100) / 100
+    : Math.round(computedTotal * 100) / 100;
 
   const surcharge = typeof parsed.surcharge === 'number' && parsed.surcharge > 0
-    ? parsed.surcharge
+    ? Math.round(parsed.surcharge * 100) / 100
     : undefined;
 
-  // Validation: do items add up?
-  const expectedSubtotal = parsed.subtotal ?? (surcharge ? reportedTotal - surcharge : reportedTotal);
+  // Expected subtotal (items only, before surcharge)
+  const expectedSubtotal = typeof parsed.subtotal === 'number' && parsed.subtotal > 0
+    ? parsed.subtotal
+    : surcharge
+      ? Math.round((reportedTotal - surcharge) * 100) / 100
+      : reportedTotal;
+
+  // Validate item sum vs expected subtotal
   if (expectedSubtotal > 0 && computedTotal > 0) {
     const ratio = computedTotal / expectedSubtotal;
-    if (ratio < 0.5 || ratio > 2.0) {
-      validationWarnings.push(`Item sum ($${computedTotal.toFixed(2)}) differs significantly from receipt total ($${expectedSubtotal.toFixed(2)}) — some items may be missing`);
-    } else if (ratio < 0.8 || ratio > 1.2) {
-      validationWarnings.push('Minor discrepancy between item sum and total — check items');
+    if (ratio < 0.4 || ratio > 2.5) {
+      validationWarnings.push(`Item sum (${formatAud(computedTotal)}) differs significantly from receipt total (${formatAud(expectedSubtotal)}) — some items may be missing or mispriced`);
+    } else if (ratio < 0.75 || ratio > 1.25) {
+      validationWarnings.push('Minor discrepancy between item sum and total — worth double-checking');
     }
   }
 
-  if (!parsed.merchant || parsed.merchant.length < 2) {
-    validationWarnings.push('Merchant name unclear');
+  // Sanity: no single item should cost more than the total
+  const overpriced = lineItems.filter(item => item.price > reportedTotal * 1.05);
+  if (overpriced.length > 0) {
+    validationWarnings.push(`${overpriced.length} item(s) have prices larger than the bill total — please review`);
+  }
+
+  if (!parsed.merchant || String(parsed.merchant).trim().length < 2) {
+    validationWarnings.push('Merchant name unclear — check the receipt');
   }
 
   if (!parsed.date) {
@@ -323,11 +368,6 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
 
   if (reportedTotal > 10000) {
     validationWarnings.push('Unusually high total — please verify');
-  }
-
-  const suspiciousItems = lineItems.filter(item => item.price > reportedTotal || (item.quantity ?? 1) > 100);
-  if (suspiciousItems.length > 0) {
-    validationWarnings.push(`${suspiciousItems.length} item(s) have unusual prices or quantities`);
   }
 
   // Validate time format
@@ -344,10 +384,12 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
   }
 
   return {
-    merchant: parsed.merchant || 'Receipt',
+    merchant: String(parsed.merchant || 'Receipt').trim(),
     date: parsed.date || '',
     time,
-    subtotal: typeof parsed.subtotal === 'number' ? parsed.subtotal : undefined,
+    subtotal: typeof parsed.subtotal === 'number' && parsed.subtotal > 0
+      ? Math.round(parsed.subtotal * 100) / 100
+      : undefined,
     surcharge,
     total: reportedTotal,
     lineItems,
@@ -356,26 +398,34 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
   };
 }
 
-// ─── Regex Fallback (FALLBACK 2) ─────────────────────────────────────
-// Used only when both Gemini paths fail.
+function formatAud(n: number) {
+  return `$${n.toFixed(2)}`;
+}
 
-const totalKeywords = ['total', 'amount due', 'balance due', 'grand total'];
+// ─── Regex Fallback (FALLBACK 2) ─────────────────────────────────────
+const totalKeywords = ['total', 'amount due', 'balance due', 'grand total', 'amount paid'];
 const subtotalKeywords = ['subtotal', 'sub total', 'sub-total'];
-const surchargeKeywords = ['surcharge', 'holiday surcharge', 'weekend surcharge', 'service charge'];
+const surchargeKeywords = ['surcharge', 'holiday surcharge', 'weekend surcharge', 'service charge', 'service fee', 'credit card fee'];
 const skipKeywords = [
-  'visa', 'mastercard', 'eftpos', 'paywave', 'cash', 'change', 'card', 'payment',
-  'abn', 'phone', 'tel', 'fax', 'table', 'order', 'server', 'cashier',
-  'thank', 'welcome', 'loyalty', 'points', 'member', 'incl. gst', 'gst component',
-  'www.', 'http', '.com', '.au', 'wifi', 'password'
+  'visa', 'mastercard', 'eftpos', 'paywave', 'payid', 'cash', 'change', 'card', 'payment', 'refund',
+  'approved', 'approval', 'authorisation', 'reference', 'transaction', 'receipt #', 'rrn:',
+  'abn', 'phone', 'tel', 'fax', 'table', 'order', 'server', 'cashier', 'operator',
+  'thank', 'welcome', 'loyalty', 'points', 'member', 'incl. gst', 'gst component', 'gst $',
+  'you saved', 'savings', 'special price', 'member price',
+  'www.', 'http', '.com', '.au', 'wifi', 'password', 'network',
+  'contactless', 'tap &', 'tap and', 'account:', 'signature'
 ];
 
-const priceRegex = /\$?\s*(-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2}))\s*(?:[A-Z*])?\s*$/i;
+const priceRegex = /\$?\s*(-?\d{1,4}(?:[.,]\d{3})*(?:[.,]\d{2}))\s*(?:[A-Z*])?\s*$/i;
 const quantityRegex = /^(\d+)\s*[xX×]\s*/;
-const productCodeRegex = /^\d{4,8}\s+/;
+// Strip leading barcodes (4–13 digits) followed by whitespace — covers EAN-8 to EAN-13
+const productCodeRegex = /^\d{4,13}\s+/;
 
 const dateRegexes = [
+  // ISO: 2025-03-15
   /\b(\d{4})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/,
-  /\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](\\d{2,4})\b/
+  // AU: 15/03/2025 or 15/03/25
+  /\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](\d{2,4})\b/
 ];
 
 function normalizePrice(value: string) {
@@ -400,14 +450,16 @@ function lineHasKeyword(line: string, keywords: string[]) {
 }
 
 function parseDate(text: string) {
-  for (const regex of dateRegexes) {
-    const match = text.match(regex);
-    if (!match) continue;
-    if (match[1].length === 4) {
-      return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
-    }
-    const year = match[3].length === 2 ? `20${match[3]}` : match[3];
-    return `${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+  // ISO format first
+  const isoMatch = text.match(dateRegexes[0]);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+  // AU format DD/MM/YY or DD/MM/YYYY
+  const auMatch = text.match(dateRegexes[1]);
+  if (auMatch) {
+    const year = auMatch[3].length === 2 ? `20${auMatch[3]}` : auMatch[3];
+    return `${year}-${auMatch[2].padStart(2, '0')}-${auMatch[1].padStart(2, '0')}`;
   }
   return '';
 }
@@ -431,8 +483,8 @@ function parseTime(text: string): string {
 function parseReceiptFallback(text: string): ParsedReceipt {
   const rawLines = text.split('\n').map((l) => l.trim()).filter(Boolean);
 
-  // Merge name lines followed by price-only lines
-  const priceOnlyRe = /^\s*\$?\s*-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})\s*(?:[A-Z*])?\s*$/i;
+  // Merge name lines followed by standalone price lines
+  const priceOnlyRe = /^\s*\$?\s*-?\d{1,4}(?:[.,]\d{3})*(?:[.,]\d{2})\s*(?:[A-Z*])?\s*$/i;
   const lines: string[] = [];
   for (let i = 0; i < rawLines.length; i++) {
     const cur = rawLines[i];
@@ -445,11 +497,13 @@ function parseReceiptFallback(text: string): ParsedReceipt {
     }
   }
 
+  // Merchant: first line with ≥ 3 alpha chars that isn't an address/ABN/phone
   const merchant = lines.find((line) => {
     if (line.length < 3 || /^\d+$/.test(line)) return false;
-    if (/^\d+\s+(st|rd|th|ave|blvd|street|road|drive)/i.test(line)) return false;
-    if (/^(abn|phone|tel|fax)/i.test(line)) return false;
-    return /[A-Za-z]{2,}/.test(line);
+    if (/^\d+\s+(st|rd|nd|th|ave|blvd|street|road|drive|lane|court|crt|pl|place)/i.test(line)) return false;
+    if (/^(abn|phone|tel|fax|tax invoice|receipt|duplicate|void)/i.test(line)) return false;
+    if (/[^A-Za-z0-9\s&'.\-–]/.test(line) && !/ /.test(line)) return false; // skip pure symbol lines
+    return /[A-Za-z]{3,}/.test(line);
   }) ?? 'Receipt';
 
   const date = lines.map(parseDate).find((v) => v) ?? '';
@@ -473,7 +527,9 @@ function parseReceiptFallback(text: string): ParsedReceipt {
     if (!label || label.length < 2) continue;
 
     if (lineHasKeyword(line, totalKeywords) && !lineHasKeyword(line, subtotalKeywords)) {
-      total = price; continue;
+      // Keep the highest total seen (some receipts print it twice)
+      if (!total || price > total) total = price;
+      continue;
     }
     if (lineHasKeyword(line, subtotalKeywords)) { subtotal = price; continue; }
     if (lineHasKeyword(line, surchargeKeywords)) { surcharge = price; continue; }
@@ -481,10 +537,12 @@ function parseReceiptFallback(text: string): ParsedReceipt {
     let quantity: number | undefined;
     const qtyMatch = label.match(quantityRegex);
     if (qtyMatch) {
-      quantity = parseInt(qtyMatch[1], 10);
+      const q = parseInt(qtyMatch[1], 10);
+      if (q >= 2 && q <= 99) quantity = q;
       label = label.replace(quantityRegex, '').trim();
     }
 
+    // Strip product codes and cleanup
     label = label.replace(productCodeRegex, '').trim();
     label = label.replace(/[.\-_]{3,}$/g, '').replace(/\s{2,}/g, ' ').trim();
 
@@ -496,7 +554,11 @@ function parseReceiptFallback(text: string): ParsedReceipt {
   const computedTotal = items.reduce((s, i) => s + i.price, 0);
 
   return {
-    merchant, date, time, subtotal, surcharge,
+    merchant,
+    date,
+    time,
+    subtotal,
+    surcharge,
     total: total ?? subtotal ?? computedTotal,
     lineItems: items,
     rawOcrText: text,
@@ -531,23 +593,23 @@ serve(async (req) => {
       if (error) throw error;
       base64Content = arrayBufferToBase64(await data.arrayBuffer());
     } else if (imageUrl) {
-      const resp = await fetch(imageUrl);
+      const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(15000) });
       if (!resp.ok) throw new Error('Failed to download image from URL');
       base64Content = arrayBufferToBase64(await resp.arrayBuffer());
     }
 
     let parsed: ParsedReceipt | null = null;
 
-    // ── Step 2: PRIMARY — Gemini Vision ──
+    // ── Step 2: PRIMARY — Gemini Vision (image → structured JSON) ──
     if (geminiApiKey) {
-      console.log('🔍 Attempting Gemini Vision...');
+      console.log(`🔍 Gemini Vision (${(base64Content.length / 1000).toFixed(0)} KB base64)...`);
       parsed = await parseWithGeminiVision(base64Content, mimeType);
       if (parsed) {
-        console.log(`✅ Gemini Vision: ${parsed.lineItems.length} items, total=$${parsed.total}, surcharge=$${parsed.surcharge ?? 0}`);
+        console.log(`✅ Gemini Vision: ${parsed.lineItems.length} items, total=${formatAud(parsed.total)}, surcharge=${formatAud(parsed.surcharge ?? 0)}`);
       }
     }
 
-    // ── Step 3: FALLBACK 1 — Vision API text → Gemini text ──
+    // ── Step 3: FALLBACK 1 — Google Vision API text → Gemini text ──
     if (!parsed && visionApiKey) {
       console.log('⚡ Falling back to Vision API + Gemini text...');
       try {
@@ -602,7 +664,7 @@ serve(async (req) => {
       validationWarnings: ['Could not read the receipt. Try a clearer, well-lit photo.']
     };
 
-    console.log(`📊 OCR Complete: method=${result.method}, items=${result.lineItems.length}, total=${result.total}, surcharge=${result.surcharge ?? 0}, warnings=${result.validationWarnings?.length ?? 0}`);
+    console.log(`📊 OCR Complete: method=${result.method}, items=${result.lineItems.length}, total=${formatAud(result.total)}, surcharge=${formatAud(result.surcharge ?? 0)}, warnings=${result.validationWarnings?.length ?? 0}`);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

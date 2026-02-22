@@ -393,7 +393,15 @@
       }
 
       function formatCurrency(n) {
-        return '$' + Number(n).toFixed(2);
+        return new Intl.NumberFormat('en-AU', {
+          style: 'currency',
+          currency: 'AUD',
+          minimumFractionDigits: 2
+        }).format(Number.isFinite(Number(n)) ? Number(n) : 0);
+      }
+
+      function round2(v) {
+        return Math.round((v + Number.EPSILON) * 100) / 100;
       }
 
       function getShareId() {
@@ -461,27 +469,32 @@
 
         // Per-person breakdown
         const peopleList = document.getElementById('peopleList');
-        const subtotal = receipt.subtotal || receipt.total || 0;
-        const total = receipt.total || 0;
-        const taxRatio = subtotal > 0 ? total / subtotal : 1;
+        const surcharge = receipt.surcharge || 0;
 
-        // Calculate each person's share
+        // Calculate each person's item subtotal
         const shares = {};
+        let assignedTotal = 0;
         people.forEach(p => { shares[p.id] = 0; });
 
         lineItems.forEach(item => {
-          const assigned = item.assignedTo || [];
+          const assigned = item.assignedTo || item.allocatedTo || [];
           if (assigned.length === 0) return;
           const perPerson = (item.price || 0) / assigned.length;
           assigned.forEach(id => {
-            if (shares[id] !== undefined) shares[id] += perPerson;
+            if (shares[id] !== undefined) {
+              shares[id] += perPerson;
+              assignedTotal += perPerson;
+            }
           });
         });
 
-        // Apply tax proportionally
-        people.forEach(p => {
-          shares[p.id] = shares[p.id] * taxRatio;
-        });
+        // Distribute surcharge proportionally to each person's item share
+        if (surcharge > 0 && assignedTotal > 0) {
+          people.forEach(p => {
+            const personSurcharge = round2((shares[p.id] / assignedTotal) * surcharge);
+            shares[p.id] = round2(shares[p.id] + personSurcharge);
+          });
+        }
 
         // Sort: payer first, then by amount descending
         const sorted = [...people].sort((a, b) => {

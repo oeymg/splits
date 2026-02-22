@@ -18,10 +18,51 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { runOcr } from '../lib/ocr';
 import { uploadReceiptImage } from '../lib/supabase';
 import { formatCurrency } from '../lib/settlements';
-import { ReceiptDraft } from '../types';
+import { ReceiptDraft, LineItem } from '../types';
 import { preprocessImageForOcr } from '../lib/imagePreprocessing';
 import { colors, spacing, borderRadius, shadows } from '../theme';
 import { StepIndicator } from '../components/StepIndicator';
+
+// Names that look like items but are receipt metadata
+const NON_ITEM_NAMES = new Set([
+    'eft', 'eftpos', 'eft payment', 'eftpos payment',
+    'aud', 'gst', 'hst', 'pst', 'vat', 'tax', 'taxes',
+    'subtotal', 'sub total', 'sub-total',
+    'total', 'grand total', 'order total', 'total due', 'amount due',
+    'balance', 'balance due', 'balance payable', 'balance owing',
+    'change', 'change due', 'change given', 'your change',
+    'cash', 'cash tendered', 'cash payment', 'cash received',
+    'rounding', 'rounding adj', 'rounding adjustment',
+    'visa', 'mastercard', 'amex', 'american express',
+    'thank you', 'thanks', 'receipt', 'tax invoice',
+    'loyalty', 'points', 'rewards',
+]);
+const NON_ITEM_REGEX = [
+    /^eft(pos)?(\s+payment)?$/i,
+    /^(incl\.?\s+)?gst(\s+incl\.?)?$/i,
+    /^sub[\s-]?total$/i,
+    /^(grand\s+|order\s+)?(total|amount)(\s+(due|payable))?$/i,
+    /^balance(\s+(due|payable|owing))?$/i,
+    /^(your\s+)?change(\s+due)?$/i,
+    /^cash(\s+(tendered|payment|received))?$/i,
+    /^rounding(\s+adj(ustment)?)?$/i,
+    /^(credit\s+)?card(\s+fee)?$/i,
+    /^service\s+(charge|fee|surcharge)$/i,
+    /^\d{4,}$/,           // pure barcodes / product codes
+    /^[*\-=_\s.]{2,}$/,  // divider lines
+    /^(thank\s+you|thanks)[\s!.]*$/i,
+    /^tax\s*invoice$/i,
+];
+function filterNonItems(items: LineItem[]): LineItem[] {
+    return items.filter(item => {
+        const name = item.name.trim();
+        if (name.length <= 1) return false;
+        const lower = name.toLowerCase();
+        if (NON_ITEM_NAMES.has(lower)) return false;
+        if (NON_ITEM_REGEX.some(p => p.test(name))) return false;
+        return true;
+    });
+}
 
 type Props = {
     onReceiptProcessed: (draft: ReceiptDraft, imageUri: string) => void;
@@ -38,93 +79,146 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
     const [ocrDraft, setOcrDraft] = useState<ReceiptDraft | null>(null);
     const [errorMessage, setErrorMessage] = useState('');
 
-    // Animated values for item reveal
-    const [revealedCount, setRevealedCount] = useState(0);
+    // Animated values for results card
     const fadeAnim = useRef(new Animated.Value(0)).current;
-    const slideAnim = useRef(new Animated.Value(20)).current;
+    const slideAnim = useRef(new Animated.Value(40)).current;
+    const cardScaleAnim = useRef(new Animated.Value(0.93)).current;
+
+    // Per-item animations for results list
+    const resultItemAnimsRef = useRef<Map<string, { opacity: Animated.Value; translateX: Animated.Value }>>(new Map());
+    const getResultItemAnim = (id: string) => {
+        if (!resultItemAnimsRef.current.has(id)) {
+            resultItemAnimsRef.current.set(id, {
+                opacity: new Animated.Value(0),
+                translateX: new Animated.Value(16)
+            });
+        }
+        return resultItemAnimsRef.current.get(id)!;
+    };
 
     // Entrance animations for pick state
     const pickFade = useRef(new Animated.Value(0)).current;
-    const pickSlide = useRef(new Animated.Value(30)).current;
+    const pickSlide = useRef(new Animated.Value(60)).current;
 
-    // Pulsing animation for processing state
-    const pulseAnim = useRef(new Animated.Value(1)).current;
+    // Processing state: card entrance + scan line
+    const processCardFade = useRef(new Animated.Value(0)).current;
+    const processCardSlide = useRef(new Animated.Value(40)).current;
+    const scanLineAnim = useRef(new Animated.Value(0)).current;
+
+    // Exit animation when continuing to items
+    const exitOpacity = useRef(new Animated.Value(1)).current;
+    const exitTranslateY = useRef(new Animated.Value(0)).current;
+    const continuePressAnim = useRef(new Animated.Value(1)).current;
 
     // Entrance animation for pick state
     useEffect(() => {
         if (screenState === 'pick') {
             pickFade.setValue(0);
-            pickSlide.setValue(30);
+            pickSlide.setValue(60);
             Animated.parallel([
                 Animated.timing(pickFade, {
                     toValue: 1,
-                    duration: 600,
+                    duration: 350,
                     easing: Easing.out(Easing.quad),
                     useNativeDriver: true
                 }),
                 Animated.spring(pickSlide, {
                     toValue: 0,
-                    tension: 50,
-                    friction: 8,
+                    tension: 70,
+                    friction: 10,
                     useNativeDriver: true
                 })
             ]).start();
         }
     }, [screenState]);
 
-    // Pulsing animation for processing state
+    // Processing state: card slides in + scan line sweeps the image
     useEffect(() => {
         if (screenState === 'processing') {
-            const pulse = Animated.loop(
+            processCardFade.setValue(0);
+            processCardSlide.setValue(40);
+            Animated.parallel([
+                Animated.timing(processCardFade, {
+                    toValue: 1,
+                    duration: 350,
+                    easing: Easing.out(Easing.quad),
+                    useNativeDriver: true
+                }),
+                Animated.spring(processCardSlide, {
+                    toValue: 0,
+                    tension: 70,
+                    friction: 10,
+                    useNativeDriver: true
+                })
+            ]).start();
+
+            scanLineAnim.setValue(0);
+            const scan = Animated.loop(
                 Animated.sequence([
-                    Animated.timing(pulseAnim, {
-                        toValue: 1.1,
-                        duration: 1000,
-                        easing: Easing.inOut(Easing.ease),
+                    Animated.timing(scanLineAnim, {
+                        toValue: 1,
+                        duration: 1800,
+                        easing: Easing.inOut(Easing.quad),
                         useNativeDriver: true
                     }),
-                    Animated.timing(pulseAnim, {
-                        toValue: 1,
-                        duration: 1000,
-                        easing: Easing.inOut(Easing.ease),
+                    Animated.timing(scanLineAnim, {
+                        toValue: 0,
+                        duration: 300,
+                        easing: Easing.in(Easing.quad),
                         useNativeDriver: true
                     })
                 ])
             );
-            pulse.start();
-            return () => pulse.stop();
+            scan.start();
+            return () => scan.stop();
         }
     }, [screenState]);
 
-    // Animate items appearing one by one when OCR completes
+    // Results: card spring-pops in, items stagger in from the right
     useEffect(() => {
         if (screenState === 'results' && ocrDraft) {
-            // Fade in the results card
             Animated.parallel([
                 Animated.timing(fadeAnim, {
                     toValue: 1,
-                    duration: 600,
+                    duration: 350,
                     easing: Easing.out(Easing.quad),
                     useNativeDriver: true
                 }),
                 Animated.spring(slideAnim, {
                     toValue: 0,
-                    tension: 50,
-                    friction: 8,
+                    tension: 70,
+                    friction: 10,
+                    useNativeDriver: true
+                }),
+                Animated.spring(cardScaleAnim, {
+                    toValue: 1,
+                    tension: 70,
+                    friction: 10,
                     useNativeDriver: true
                 })
             ]).start();
 
-            // Reveal items one at a time
-            const totalItems = ocrDraft.lineItems.length;
-            if (totalItems > 0) {
-                let count = 0;
-                const interval = setInterval(() => {
-                    count++;
-                    setRevealedCount(count);
-                    if (count >= totalItems) clearInterval(interval);
-                }, 150);
-                return () => clearInterval(interval);
+            if (ocrDraft.lineItems.length > 0) {
+                Animated.stagger(
+                    45,
+                    ocrDraft.lineItems.map((item) => {
+                        const anim = getResultItemAnim(item.id);
+                        return Animated.parallel([
+                            Animated.timing(anim.opacity, {
+                                toValue: 1,
+                                duration: 250,
+                                easing: Easing.out(Easing.quad),
+                                useNativeDriver: true
+                            }),
+                            Animated.spring(anim.translateX, {
+                                toValue: 0,
+                                tension: 90,
+                                friction: 11,
+                                useNativeDriver: true
+                            })
+                        ]);
+                    })
+                ).start();
             }
         }
     }, [screenState, ocrDraft]);
@@ -132,9 +226,10 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
     const processImage = async (uri: string) => {
         setPreviewUri(uri);
         setScreenState('processing');
-        setRevealedCount(0);
         fadeAnim.setValue(0);
-        slideAnim.setValue(20);
+        slideAnim.setValue(40);
+        cardScaleAnim.setValue(0.93);
+        resultItemAnimsRef.current.clear();
 
         try {
             // Step 1: Advanced image preprocessing — enhance quality for OCR
@@ -153,8 +248,11 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
             setStatusText('Parsing receipt items…');
             const draft = await ocrPromise;
 
+            // Strip out non-items (EFT, AUD, totals, dividers, etc.)
+            const filteredDraft = { ...draft, lineItems: filterNonItems(draft.lineItems) };
+
             // Show results - don't auto-proceed
-            setOcrDraft(draft);
+            setOcrDraft(filteredDraft);
             setStatusText('');
             setScreenState('results');
         } catch (error: any) {
@@ -204,12 +302,27 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
         setPreviewUri(null);
         setOcrDraft(null);
         setErrorMessage('');
-        setRevealedCount(0);
+        resultItemAnimsRef.current.clear();
     };
 
     const handleContinue = () => {
         if (ocrDraft && previewUri) {
-            onReceiptProcessed(ocrDraft, previewUri);
+            Animated.parallel([
+                Animated.timing(exitOpacity, {
+                    toValue: 0,
+                    duration: 260,
+                    easing: Easing.in(Easing.quad),
+                    useNativeDriver: true
+                }),
+                Animated.timing(exitTranslateY, {
+                    toValue: -70,
+                    duration: 260,
+                    easing: Easing.in(Easing.cubic),
+                    useNativeDriver: true
+                })
+            ]).start(() => {
+                onReceiptProcessed(ocrDraft, previewUri);
+            });
         }
     };
 
@@ -288,15 +401,30 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
                     <Animated.View
                         style={[
                             styles.processingCard,
-                            { transform: [{ scale: pulseAnim }] }
+                            { opacity: processCardFade, transform: [{ translateY: processCardSlide }] }
                         ]}
                     >
                         {previewUri ? (
-                            <Image
-                                source={{ uri: previewUri }}
-                                style={styles.previewSmall}
-                                blurRadius={1}
-                            />
+                            <View style={styles.previewWrapper}>
+                                <Image
+                                    source={{ uri: previewUri }}
+                                    style={styles.previewSmall}
+                                    blurRadius={2}
+                                />
+                                <Animated.View
+                                    style={[
+                                        styles.scanLine,
+                                        {
+                                            transform: [{
+                                                translateY: scanLineAnim.interpolate({
+                                                    inputRange: [0, 1],
+                                                    outputRange: [0, 196]
+                                                })
+                                            }]
+                                        }
+                                    ]}
+                                />
+                            </View>
                         ) : null}
                         <View style={styles.spinnerRow}>
                             <ActivityIndicator size="small" color={colors.primary} />
@@ -382,6 +510,7 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
 
     return (
         <SafeAreaView style={styles.safe}>
+            <Animated.View style={[{ flex: 1 }, { opacity: exitOpacity, transform: [{ translateY: exitTranslateY }] }]}>
             <ScrollView contentContainerStyle={styles.resultsContainer}>
                 <Pressable style={styles.backPill} onPress={handleRetry}>
                     <Text style={styles.backText}>‹ Retake</Text>
@@ -395,7 +524,7 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
                 <Animated.View
                     style={[
                         styles.resultsCard,
-                        { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
+                        { opacity: fadeAnim, transform: [{ translateY: slideAnim }, { scale: cardScaleAnim }] }
                     ]}
                 >
                     {/* Photo thumbnail */}
@@ -450,21 +579,24 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
                         {itemsFound} {itemsFound === 1 ? 'item' : 'items'} detected
                     </Text>
 
-                    {ocrDraft?.lineItems.map((item, index) => (
-                        <View
-                            key={item.id}
-                            style={[
-                                styles.resultItem,
-                                index >= revealedCount && { opacity: 0 }
-                            ]}
-                        >
-                            <View style={styles.resultItemDot} />
-                            <Text style={styles.resultItemName}>{item.name}</Text>
-                            <Text style={styles.resultItemPrice}>
-                                {formatCurrency(item.price)}
-                            </Text>
-                        </View>
-                    ))}
+                    {ocrDraft?.lineItems.map((item) => {
+                        const anim = getResultItemAnim(item.id);
+                        return (
+                            <Animated.View
+                                key={item.id}
+                                style={[
+                                    styles.resultItem,
+                                    { opacity: anim.opacity, transform: [{ translateX: anim.translateX }] }
+                                ]}
+                            >
+                                <View style={styles.resultItemDot} />
+                                <Text style={styles.resultItemName}>{item.name}</Text>
+                                <Text style={styles.resultItemPrice}>
+                                    {formatCurrency(item.price)}
+                                </Text>
+                            </Animated.View>
+                        );
+                    })}
 
                     {itemsFound === 0 ? (
                         <View style={styles.noItemsBox}>
@@ -484,19 +616,28 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
                 </Animated.View>
 
                 {/* Continue button */}
-                <Pressable
-                    style={({ pressed }) => [styles.continueButton, pressed && { opacity: 0.85 }]}
-                    onPress={handleContinue}
-                >
-                    <Text style={styles.continueButtonText}>
-                        Perfect! Let's assign items →
-                    </Text>
-                </Pressable>
+                <Animated.View style={{ transform: [{ scale: continuePressAnim }] }}>
+                    <Pressable
+                        style={styles.continueButton}
+                        onPressIn={() => Animated.spring(continuePressAnim, {
+                            toValue: 0.95, tension: 300, friction: 10, useNativeDriver: true
+                        }).start()}
+                        onPressOut={() => Animated.spring(continuePressAnim, {
+                            toValue: 1, tension: 300, friction: 10, useNativeDriver: true
+                        }).start()}
+                        onPress={handleContinue}
+                    >
+                        <Text style={styles.continueButtonText}>
+                            Perfect! Let's assign items →
+                        </Text>
+                    </Pressable>
+                </Animated.View>
 
                 <Pressable style={styles.retakeLink} onPress={handleRetry}>
                     <Text style={styles.retakeLinkText}>Not quite right? Try again</Text>
                 </Pressable>
             </ScrollView>
+            </Animated.View>
         </SafeAreaView>
     );
 }
@@ -593,11 +734,28 @@ const styles = StyleSheet.create({
         marginTop: spacing.sm,
         ...shadows.lg
     },
+    previewWrapper: {
+        width: '100%',
+        overflow: 'hidden',
+        borderRadius: borderRadius.lg,
+    },
     previewSmall: {
         width: '100%',
         height: 200,
         borderRadius: borderRadius.lg,
-        opacity: 0.8
+        opacity: 0.75
+    },
+    scanLine: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 3,
+        backgroundColor: colors.primary + 'CC',
+        shadowColor: colors.primary,
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.9,
+        shadowRadius: 6,
     },
     spinnerRow: {
         flexDirection: 'row',
