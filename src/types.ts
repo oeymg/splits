@@ -48,6 +48,7 @@ export type ReceiptDraft = {
   date: string;
   time?: string;
   total: number;
+  receiptTotal?: number; // printed total from the receipt (may differ from item sum)
   subtotal?: number;
   tax?: number;
   surcharge?: number;

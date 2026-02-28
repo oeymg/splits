@@ -16,9 +16,9 @@ export async function preprocessImageForOcr(uri: string): Promise<{
   try {
     const result = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 1200 } }],
+      [{ resize: { width: 800 } }],
       {
-        compress: 0.88,
+        compress: 0.72,
         format: ImageManipulator.SaveFormat.JPEG,
         base64: true
       }

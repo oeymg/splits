@@ -61,11 +61,36 @@ export async function runOcr({
     warnings: data.validationWarnings?.length ?? 0
   });
 
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+  // Deduplicate: if OCR returns two identical rows (same name + same unit price),
+  // merge them into one entry with an incremented quantity so that downstream
+  // expansion still produces the correct number of individual cards.
+  const rawItems = data.lineItems ?? [];
+  const dedupMap = new Map<string, typeof rawItems[0]>();
+  for (const item of rawItems) {
+    const unitPrice = item.quantity && item.quantity > 1
+      ? round2(item.price / item.quantity)
+      : item.price;
+    const key = `${item.name.toLowerCase().trim()}|${unitPrice}`;
+    const existing = dedupMap.get(key);
+    if (existing && !item.quantity && !existing.quantity) {
+      // Same item name and unit price, no explicit quantity on either — combine
+      const existingQty = existing.quantity ?? 1;
+      dedupMap.set(key, {
+        ...existing,
+        price: round2(existing.price + item.price),
+        quantity: existingQty + 1
+      });
+    } else {
+      dedupMap.set(key, { ...item });
+    }
+  }
+
   // Expand multi-quantity items into individual line items so each can be
   // assigned to a different person on the items screen.
   // e.g. "2x Flat White $8.00" → two separate "Flat White $4.00" items.
-  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-  const lineItems = (data.lineItems ?? []).flatMap((item) => {
+  const lineItems = [...dedupMap.values()].flatMap((item) => {
     const qty = item.quantity && item.quantity > 1 ? item.quantity : 1;
     const priceEach = round2(item.price / qty);
     return Array.from({ length: qty }, () => ({
@@ -77,13 +102,23 @@ export async function runOcr({
     }));
   });
 
+  const itemsSum = round2(lineItems.reduce((sum, item) => sum + item.price, 0));
+  const surcharge = Number.isFinite(data.surcharge) && (data.surcharge as number) > 0
+    ? round2(data.surcharge as number)
+    : undefined;
+
+  const printedTotal = Number.isFinite(data.total) && (data.total as number) > 0
+    ? round2(data.total as number)
+    : undefined;
+
   return {
     merchant: data.merchant ?? '',
     date: data.date ?? new Date().toISOString().slice(0, 10),
     time: data.time,
-    total: Number.isFinite(data.total) ? (data.total as number) : 0,
+    total: round2(itemsSum + (surcharge ?? 0)),
+    receiptTotal: printedTotal,
     subtotal: data.subtotal,
-    surcharge: data.surcharge,
+    surcharge,
     imageUri: imageUrl ?? undefined,
     rawOcrText: data.rawOcrText,
     confidence: data.confidence,

@@ -27,7 +27,12 @@ export function GroupScreen({
     onBack
 }: Props) {
     const [newName, setNewName] = useState('');
+    const me = people.find((p) => p.id === 'me');
     const payer = people.find((p) => p.id === payerId);
+
+    const updateMyName = (name: string) => {
+        setPeople((prev) => prev.map((p) => p.id === 'me' ? { ...p, name } : p));
+    };
 
     // Entrance animations
     const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -86,7 +91,8 @@ export function GroupScreen({
         );
     };
 
-    const canProceed = people.length >= 2 && groupName.trim().length > 0;
+    const myName = me?.name.trim() ?? '';
+    const canProceed = people.length >= 2 && groupName.trim().length > 0 && myName.length > 0;
 
 
     return (
@@ -106,6 +112,31 @@ export function GroupScreen({
                 >
                     <Text style={styles.title}>Who's in? 👥</Text>
                     <Text style={styles.subtitle}>Add everyone who joined the fun (and the bill!)</Text>
+                </Animated.View>
+
+                {/* Your Name */}
+                <Animated.View
+                    style={[
+                        styles.section,
+                        {
+                            opacity: fadeAnim,
+                            transform: [{ translateY: slideAnim }]
+                        }
+                    ]}
+                >
+                    <Text style={styles.label}>👤 Your name</Text>
+                    <TextInput
+                        style={[styles.input, myName.length === 0 && styles.inputRequired]}
+                        placeholder="e.g. Omar, Sarah…"
+                        placeholderTextColor={colors.textLight}
+                        value={me?.name ?? ''}
+                        onChangeText={updateMyName}
+                        autoCapitalize="words"
+                        autoFocus
+                    />
+                    {myName.length === 0 && (
+                        <Text style={styles.requiredHint}>Required to continue</Text>
+                    )}
                 </Animated.View>
 
                 {/* Group Name */}
@@ -286,7 +317,13 @@ export function GroupScreen({
                     </Pressable>
 
                     {!canProceed && people.length >= 2 && (
-                        <Text style={styles.warningText}>💡 Don't forget a group name!</Text>
+                        <Text style={styles.warningText}>
+                            {myName.length === 0
+                                ? '💡 Add your name to continue!'
+                                : groupName.trim().length === 0
+                                    ? '💡 Don\'t forget a group name!'
+                                    : ''}
+                        </Text>
                     )}
                 </Animated.View>
             </ScrollView>
@@ -488,6 +525,16 @@ const styles = StyleSheet.create({
         color: colors.warning,
         textAlign: 'center',
         marginTop: spacing.md
+    },
+    inputRequired: {
+        borderColor: colors.warning,
+    },
+    requiredHint: {
+        fontSize: 12,
+        color: colors.warning,
+        fontWeight: '600',
+        marginTop: spacing.xs,
+        marginLeft: spacing.xs,
     },
 
     methodScroll: {

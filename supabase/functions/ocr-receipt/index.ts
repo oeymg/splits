@@ -193,13 +193,13 @@ async function parseWithGPT4oVision(base64Image: string, mimeType = 'image/jpeg'
                 type: 'image_url',
                 image_url: {
                   url: `data:${mimeType};base64,${base64Image}`,
-                  detail: 'high'
+                  detail: 'auto'
                 }
               }
             ]
           }],
           temperature: 0,
-          max_tokens: 2048
+          max_tokens: 1200
         }),
         signal: AbortSignal.timeout(40000)
       });

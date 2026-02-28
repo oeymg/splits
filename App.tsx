@@ -19,7 +19,7 @@ const emptyReceipt: ReceiptDraft = {
 };
 
 const initialPeople: Person[] = [
-  { id: 'me', name: 'You', phone: '' }
+  { id: 'me', name: '', phone: '' }
 ];
 
 const demoPeople: Person[] = [

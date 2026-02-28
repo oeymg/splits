@@ -493,6 +493,7 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
     }
 
     // ─── Results state: show what OCR found ───
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
     const itemsFound = ocrDraft?.lineItems?.length ?? 0;
     const total = ocrDraft?.total ?? 0;
     const confidence = ocrDraft?.confidence ?? 0;
@@ -610,9 +611,32 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
 
                     {/* Total */}
                     <View style={styles.resultTotalRow}>
-                        <Text style={styles.resultTotalLabel}>Total</Text>
+                        <Text style={styles.resultTotalLabel}>Parsed total</Text>
                         <Text style={styles.resultTotalValue}>{formatCurrency(total)}</Text>
                     </View>
+
+                    {/* Discrepancy notice */}
+                    {(() => {
+                        const printed = ocrDraft?.receiptTotal;
+                        if (!printed || !total || Math.abs(printed - total) < 0.01) return null;
+                        const diff = round2(total - printed);
+                        const over = diff > 0;
+                        return (
+                            <View style={[styles.discrepancyBox, { borderColor: over ? colors.warning + '60' : colors.error + '50', backgroundColor: over ? colors.warning + '12' : colors.error + '08' }]}>
+                                <Text style={[styles.discrepancyIcon]}>{over ? '⬆️' : '⬇️'}</Text>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={[styles.discrepancyTitle, { color: over ? colors.warning : colors.error }]}>
+                                        Receipt total was {formatCurrency(printed)}
+                                    </Text>
+                                    <Text style={styles.discrepancyBody}>
+                                        {over
+                                            ? `We parsed ${formatCurrency(Math.abs(diff))} more than the printed total — check for duplicates.`
+                                            : `We parsed ${formatCurrency(Math.abs(diff))} less than the printed total — some items may be missing.`}
+                                    </Text>
+                                </View>
+                            </View>
+                        );
+                    })()}
                 </Animated.View>
 
                 {/* Continue button */}
@@ -990,5 +1014,29 @@ const styles = StyleSheet.create({
         color: colors.textMuted,
         fontSize: 14,
         fontWeight: '600'
-    }
+    },
+    discrepancyBox: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: spacing.sm,
+        marginTop: spacing.md,
+        padding: spacing.md,
+        borderRadius: borderRadius.md,
+        borderWidth: 1.5,
+    },
+    discrepancyIcon: {
+        fontSize: 16,
+        marginTop: 1,
+    },
+    discrepancyTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        marginBottom: 2,
+    },
+    discrepancyBody: {
+        fontSize: 12,
+        color: colors.textMuted,
+        fontWeight: '500',
+        lineHeight: 17,
+    },
 });
