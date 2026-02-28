@@ -4,7 +4,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
  * Preprocesses a receipt image for OCR.
  * Handles JPEG, PNG, WEBP, and HEIC (iPhone default format).
  * Always outputs JPEG — ImageManipulator converts HEIC transparently on iOS.
- * Resizes to 1200px wide which is sufficient for receipt text recognition.
+ * Resizes to 800px wide at 0.72 quality — small enough for fast upload, large enough for clear text.
  */
 export async function preprocessImageForOcr(uri: string): Promise<{
   base64: string | null;
@@ -45,8 +45,7 @@ export async function preprocessImageForOcr(uri: string): Promise<{
     }
 
     // Fallback 2: fetch raw bytes and send as-is.
-    // Gemini Vision natively supports HEIC/HEIF so we don't need to decode it —
-    // this is the path that saves web users picking HEIC files in Chrome.
+    // Last resort for formats that ImageManipulator cannot handle (e.g. HEIC on web).
     try {
       const resp = await fetch(uri);
       const blob = await resp.blob();

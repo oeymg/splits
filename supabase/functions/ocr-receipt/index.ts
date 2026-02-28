@@ -22,7 +22,7 @@ type ParsedReceipt = {
 // ─── Config ─────────────────────────────────────────────────────────
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-const openaiApiKey = Deno.env.get('OPENAI_API_KEY') ?? '';
+const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY') ?? Deno.env.get('Anthropic_API_Key') ?? '';
 const bucket = Deno.env.get('RECEIPTS_BUCKET') ?? 'receipts';
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -98,7 +98,8 @@ Return JSON exactly matching this structure (no extra fields, no markdown):
   "date": "YYYY-MM-DD",
   "time": "HH:MM or null",
   "lineItems": [
-    { "name": "string", "price": 0.00, "quantity": null, "category": "food" }
+    { "name": "string", "price": 0.00, "category": "food" },
+    { "name": "string (multi-qty example)", "price": 0.00, "quantity": 2, "category": "drink" }
   ],
   "subtotal": null,
   "surcharge": null,
@@ -108,8 +109,11 @@ Return JSON exactly matching this structure (no extra fields, no markdown):
 // ─── Helpers ────────────────────────────────────────────────────────
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
+  const CHUNK = 8192;
   let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
   return btoa(binary);
 }
 
@@ -166,65 +170,61 @@ async function retryWithBackoff<T>(
   throw lastError || new Error('All retry attempts failed');
 }
 
-// ─── GPT-4o-mini Vision (PRIMARY) ────────────────────────────────────
-async function parseWithGPT4oVision(base64Image: string, mimeType = 'image/jpeg'): Promise<ParsedReceipt | null> {
-  if (!openaiApiKey) return null;
-
-  if (base64Image.length > 8_000_000) {
-    console.warn(`Image is large (${(base64Image.length / 1_000_000).toFixed(1)}MB base64) — may be slow`);
-  }
+// ─── Claude Haiku Vision (PRIMARY) ───────────────────────────────────
+async function parseWithClaude(base64Image: string, mimeType = 'image/jpeg'): Promise<ParsedReceipt | null> {
+  if (!anthropicApiKey) return null;
 
   try {
     const response = await retryWithBackoff(async () => {
-      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiApiKey}`
+          'x-api-key': anthropicApiKey,
+          'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          response_format: { type: 'json_object' },
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
           messages: [{
             role: 'user',
             content: [
-              { type: 'text', text: RECEIPT_PROMPT },
               {
-                type: 'image_url',
-                image_url: {
-                  url: `data:${mimeType};base64,${base64Image}`,
-                  detail: 'auto'
-                }
-              }
+                type: 'image',
+                source: { type: 'base64', media_type: mimeType, data: base64Image }
+              },
+              { type: 'text', text: RECEIPT_PROMPT }
             ]
-          }],
-          temperature: 0,
-          max_tokens: 1200
+          }]
         }),
-        signal: AbortSignal.timeout(40000)
+        signal: AbortSignal.timeout(25000)
       });
 
       if (!res.ok) {
         const errorText = await res.text();
-        console.error('GPT-4o-mini error:', res.status, errorText);
-        throw new Error(`OpenAI API error: ${res.status} — ${errorText.slice(0, 200)}`);
+        console.error('Claude error:', res.status, errorText);
+        throw new Error(`Anthropic API error: ${res.status} — ${errorText.slice(0, 200)}`);
       }
       return res;
     });
 
     const json = await response.json();
-    const text = json?.choices?.[0]?.message?.content ?? '';
-    if (!text) return null;
+    const raw = json?.content?.[0]?.text ?? '';
+    if (!raw) return null;
 
-    const parsed = JSON.parse(text);
+    // Extract JSON — Claude should output clean JSON per the prompt, but strip any wrapping just in case
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    const parsed = JSON.parse(jsonMatch[0]);
     const result = validateAndBuild(parsed, '');
     if (result) {
       result.confidence = 0.95;
-      result.method = 'gpt4o-vision';
+      result.method = 'claude-haiku-vision';
     }
     return result;
   } catch (error) {
-    console.error('GPT-4o-mini Vision failed:', classifyError(error));
+    console.error('Claude Vision failed:', classifyError(error));
     return null;
   }
 }
@@ -505,8 +505,8 @@ serve(async (req) => {
   }
 
   try {
-    if (!openaiApiKey) {
-      throw new Error('Missing OPENAI_API_KEY environment variable');
+    if (!anthropicApiKey) {
+      throw new Error('Missing ANTHROPIC_API_KEY environment variable');
     }
 
     const { imagePath, imageUrl, imageBase64, mimeType = 'image/jpeg' } = await req.json();
@@ -531,16 +531,16 @@ serve(async (req) => {
 
     let parsed: ParsedReceipt | null = null;
 
-    // ── Step 2: PRIMARY — GPT-4o-mini Vision ──
-    console.log(`🔍 GPT-4o-mini Vision (${(base64Content.length / 1000).toFixed(0)} KB base64)...`);
-    parsed = await parseWithGPT4oVision(base64Content, mimeType);
+    // ── Step 2: PRIMARY — Claude Haiku Vision ──
+    console.log(`🔍 Claude Haiku Vision (${(base64Content.length / 1000).toFixed(0)} KB)...`);
+    parsed = await parseWithClaude(base64Content, mimeType);
     if (parsed) {
-      console.log(`✅ GPT-4o-mini: ${parsed.lineItems.length} items, total=${formatAud(parsed.total)}, surcharge=${formatAud(parsed.surcharge ?? 0)}`);
+      console.log(`✅ Claude: ${parsed.lineItems.length} items, total=${formatAud(parsed.total)}, surcharge=${formatAud(parsed.surcharge ?? 0)}`);
     }
 
-    // ── Step 3: FALLBACK — Regex parser ──
+    // ── Step 3: FALLBACK ──
     if (!parsed) {
-      console.log('🔧 GPT-4o failed — using regex fallback...');
+      console.log('🔧 Claude failed — using regex fallback...');
       // For regex we need raw text; without a text extraction step we emit a warning
       parsed = {
         merchant: 'Receipt',

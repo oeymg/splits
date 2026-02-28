@@ -14,7 +14,6 @@ import {
     View
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { runOcr } from '../lib/ocr';
 import { uploadReceiptImage } from '../lib/supabase';
 import { formatCurrency } from '../lib/settlements';
