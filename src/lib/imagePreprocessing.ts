@@ -4,7 +4,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
  * Preprocesses a receipt image for OCR.
  * Handles JPEG, PNG, WEBP, and HEIC (iPhone default format).
  * Always outputs JPEG — ImageManipulator converts HEIC transparently on iOS.
- * Resizes to 800px wide at 0.72 quality — small enough for fast upload, large enough for clear text.
+ * Resizes to 720px wide at 0.65 quality — small enough for fast upload, large enough for clear text.
  */
 export async function preprocessImageForOcr(uri: string): Promise<{
   base64: string | null;
@@ -16,9 +16,9 @@ export async function preprocessImageForOcr(uri: string): Promise<{
   try {
     const result = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 800 } }],
+      [{ resize: { width: 720 } }],
       {
-        compress: 0.72,
+        compress: 0.65,
         format: ImageManipulator.SaveFormat.JPEG,
         base64: true
       }

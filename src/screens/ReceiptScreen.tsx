@@ -77,6 +77,8 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
     const [statusText, setStatusText] = useState('');
     const [ocrDraft, setOcrDraft] = useState<ReceiptDraft | null>(null);
     const [errorMessage, setErrorMessage] = useState('');
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [successCount, setSuccessCount] = useState(0);
 
     // Animated values for results card
     const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -103,6 +105,10 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
     const processCardFade = useRef(new Animated.Value(0)).current;
     const processCardSlide = useRef(new Animated.Value(40)).current;
     const scanLineAnim = useRef(new Animated.Value(0)).current;
+
+    // Success flash animation (shown briefly after OCR completes)
+    const doneScaleAnim = useRef(new Animated.Value(0)).current;
+    const scanAnimRef = useRef<{ stop: () => void } | null>(null);
 
     // Exit animation when continuing to items
     const exitOpacity = useRef(new Animated.Value(1)).current;
@@ -168,8 +174,9 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
                     })
                 ])
             );
+            scanAnimRef.current = { stop: () => scan.stop() };
             scan.start();
-            return () => scan.stop();
+            return () => { scan.stop(); scanAnimRef.current = null; };
         }
     }, [screenState]);
 
@@ -179,27 +186,27 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
             Animated.parallel([
                 Animated.timing(fadeAnim, {
                     toValue: 1,
-                    duration: 350,
+                    duration: 240,
                     easing: Easing.out(Easing.quad),
                     useNativeDriver: true
                 }),
                 Animated.spring(slideAnim, {
                     toValue: 0,
-                    tension: 70,
-                    friction: 10,
+                    tension: 90,
+                    friction: 11,
                     useNativeDriver: true
                 }),
                 Animated.spring(cardScaleAnim, {
                     toValue: 1,
-                    tension: 70,
-                    friction: 10,
+                    tension: 90,
+                    friction: 11,
                     useNativeDriver: true
                 })
             ]).start();
 
             if (ocrDraft.lineItems.length > 0) {
                 Animated.stagger(
-                    45,
+                    32,
                     ocrDraft.lineItems.map((item) => {
                         const anim = getResultItemAnim(item.id);
                         return Animated.parallel([
@@ -249,11 +256,33 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
 
             // Strip out non-items (EFT, AUD, totals, dividers, etc.)
             const filteredDraft = { ...draft, lineItems: filterNonItems(draft.lineItems) };
-
-            // Show results - don't auto-proceed
             setOcrDraft(filteredDraft);
+            setSuccessCount(filteredDraft.lineItems.length);
             setStatusText('');
-            setScreenState('results');
+
+            // Stop scan line + spring in success indicator
+            scanAnimRef.current?.stop();
+            doneScaleAnim.setValue(0);
+            setShowSuccess(true);
+            Animated.spring(doneScaleAnim, {
+                toValue: 1,
+                tension: 55,
+                friction: 6,
+                useNativeDriver: true,
+            }).start();
+
+            // After brief success flash, fade out processing card → results
+            setTimeout(() => {
+                Animated.timing(processCardFade, {
+                    toValue: 0,
+                    duration: 280,
+                    easing: Easing.in(Easing.quad),
+                    useNativeDriver: true,
+                }).start(() => {
+                    setShowSuccess(false);
+                    setScreenState('results');
+                });
+            }, 550);
         } catch (error: any) {
             console.error('OCR failed:', error);
             setStatusText('');
@@ -297,6 +326,9 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
     };
 
     const handleRetry = () => {
+        setShowSuccess(false);
+        setSuccessCount(0);
+        doneScaleAnim.setValue(0);
         setScreenState('pick');
         setPreviewUri(null);
         setOcrDraft(null);
@@ -425,10 +457,21 @@ export function ReceiptScreen({ onReceiptProcessed, onSkip, onBack }: Props) {
                                 />
                             </View>
                         ) : null}
-                        <View style={styles.spinnerRow}>
-                            <ActivityIndicator size="small" color={colors.primary} />
-                            <Text style={styles.processingText}>{statusText}</Text>
-                        </View>
+                        {showSuccess ? (
+                            <Animated.View style={[styles.successContainer, { transform: [{ scale: doneScaleAnim }] }]}>
+                                <Text style={styles.successEmoji}>✅</Text>
+                                <Text style={styles.successText}>
+                                    {successCount > 0
+                                        ? `Found ${successCount} item${successCount === 1 ? '' : 's'}!`
+                                        : 'Got it!'}
+                                </Text>
+                            </Animated.View>
+                        ) : (
+                            <View style={styles.spinnerRow}>
+                                <ActivityIndicator size="small" color={colors.primary} />
+                                <Text style={styles.processingText}>{statusText}</Text>
+                            </View>
+                        )}
                         <View style={styles.progressDots}>
                             <View style={[styles.dot, styles.dotActive]} />
                             <View
@@ -803,6 +846,21 @@ const styles = StyleSheet.create({
     },
     dotActive: {
         backgroundColor: colors.primary
+    },
+
+    successContainer: {
+        alignItems: 'center',
+        paddingVertical: spacing.sm,
+    },
+    successEmoji: {
+        fontSize: 48,
+        marginBottom: spacing.sm,
+    },
+    successText: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: colors.primary,
+        letterSpacing: -0.3,
     },
 
     tipsCard: {

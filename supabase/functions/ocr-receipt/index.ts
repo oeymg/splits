@@ -30,81 +30,25 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 });
 
 // ─── Prompt ──────────────────────────────────────────────────────────
-const RECEIPT_PROMPT = `You are a precise Australian receipt parser for a bill-splitting app. Respond with ONLY valid JSON — no markdown, no code blocks, no explanation.
+const RECEIPT_PROMPT = `Parse this Australian receipt for a bill-splitting app. Your entire response must be ONLY a single JSON object — no markdown, no explanation, no extra text.
 
-YOUR JOB: Extract only the ordered food/drink/products and the final amounts. Nothing else.
+SKIP these lines: payment (EFTPOS/card/cash/change/refund/approved), card details (Auth/RRN/account#), tax (GST/ABN), rounding, loyalty/points, store metadata (address/phone/URL/"Thank you"), order info (table/server/docket). Use only the FINAL total value.
 
-══ NEVER EXTRACT THESE (skip the entire line) ══
-• Payment: EFTPOS, Visa, Mastercard, PayWave, Contactless, Tap & Go, Cash, Change, Refund, APPROVED, Signature
-• AUD lines: anything that is just "AUD", "AUD $XX.XX", or starts with "AUD " without a product name
-• Card details: Auth:, Approval:, Reference:, Transaction ID:, Receipt #, Account: ****XXXX, RRN:
-• GST lines: "Incl. GST", "GST $X.XX", "GST Component", "Tax Invoice" header, "ABN XX XXX XXX XXX"
-• Rounding: "Cash rounding", "Rounding adjustment" (AU rounds to 5c)
-• Loyalty/savings: "You saved", "Member savings", "Points earned", "Rewards", "Member price", "Special", "Discount applied"
-• Receipt metadata: store address, phone, website URL, "Thank you", "Please come again", "Guest copy", "Duplicate", "VOID", "NO SALE"
-• Order info: table number, seat, server name, order number, docket number, covers, terminal ID
-• Duplicate totals: receipts sometimes print TOTAL twice — use only the final/largest value
+Fields to extract:
+merchant: Business name at top. Empty string if unclear.
+date: YYYY-MM-DD. AU receipts use DD/MM/YYYY — convert carefully.
+time: HH:MM 24h, or null.
+lineItems: Every purchased item with price > 0.
+  name: Clean name. Strip leading barcodes/codes. Strip trailing dots. Append free modifiers to parent. Merge priced add-ons into parent name and add their price.
+  price: Line total as printed. "2x Coffee $8" → price=8, qty=2 (never divide). "Coffee $4×3" → price=12, qty=3. Fuel: use the dollar total, not per-litre.
+  quantity: Only if explicitly shown (2x / Qty 3 / ×2). Omit if 1. Portion sizes like "6 piece" are NOT quantity.
+  category: exactly one of "coffee" "alcohol" "drink" "food" "dessert" "grocery" "fuel" "other"
+subtotal: Dollar amount if labelled "Subtotal"/"Sub-total", else null.
+surcharge: Weekend/holiday/service/card fee dollar amount, else null.
+total: Final amount paid.
 
-══ EXTRACTION RULES ══
-
-merchant: The business trading name — usually the LARGEST text at the very top. Skip if it is an address, ABN, phone number, or "TAX INVOICE".
-
-date: Output YYYY-MM-DD. AU receipts write DD/MM/YYYY — convert carefully (e.g. "15/03/2025" → "2025-03-15").
-
-time: 24-hour HH:MM. Null if absent.
-
-lineItems — EVERY ordered item with a price > 0:
-  name: Clean, human-readable name only.
-    • Strip leading barcode/article codes: "30482355 KALLAX Shelf 77x147cm" → "KALLAX Shelf 77x147cm"
-    • Strip leading product codes: "516268 Doritos" → "Doritos"
-    • Keep IKEA dimensions (e.g. "77x147cm").
-    • Strip trailing dot leaders: "Flat White ......... 4.50" → "Flat White"
-    • $0 modifier lines (e.g. "  No sugar", "  Extra ice"): APPEND to the previous item name; do NOT add as a separate item.
-    • Modifiers WITH a price (e.g. "+ Extra shot $1.00"): include in the parent item name and ADD to the parent price. Do not list as a separate line item.
-  price: The TOTAL price for the line as printed.
-    • "2x Flat White $8.00" → price=8.00, quantity=2 (do NOT divide — $8.00 is already the line total)
-    • "Flat White $4.50 × 3" → price=13.50 (multiply: 4.50×3), quantity=3
-    • "Chips 3.00" → price=3.00 (no quantity)
-    • "Unleaded 30.5L @ $1.89/L $57.65" → name="Unleaded 30.5L", price=57.65 (use the dollar total, not the per-litre rate)
-  quantity: Integer > 1 only when quantity is EXPLICITLY printed (e.g. "2x", "Qty 3", "× 2"). Omit if 1.
-    • "Nuggets (6 piece)" → this is a portion description, NOT a quantity. Omit quantity.
-    • "Family Serve" → NOT a quantity.
-  category: Classify each item as exactly one of these strings:
-    • "coffee"  — espresso, latte, flat white, cappuccino, long black, macchiato, cold brew, affogato
-    • "alcohol" — beer, wine, spirits, cocktails, cider
-    • "drink"   — non-alcoholic non-coffee beverages: juice, water, soda, tea, smoothie, hot chocolate
-    • "food"    — cooked meals, snacks, burgers, pizza, sandwiches, chips, anything eaten as a meal
-    • "dessert" — cake, ice cream, gelato, brownie, pastry, tart, sweets
-    • "grocery" — packaged/supermarket items, household goods
-    • "fuel"    — petrol, diesel, unleaded, LPG
-    • "other"   — anything that doesn't fit the above
-
-MULTI-LINE ITEMS: If item name is on one line and its price is on the very next line alone, merge them into a single item.
-
-subtotal: Pre-surcharge item total, if explicitly labelled "Subtotal" or "Sub-total". Null otherwise.
-
-surcharge: Dollar amount of any merchant-added surcharge (weekend, public holiday, service fee, credit card fee).
-  • "15% weekend surcharge $6.75" → surcharge=6.75
-  • "Service fee 10% $4.50" → surcharge=4.50
-  • Null if no surcharge.
-
-total: The FINAL amount the customer paid. If printed multiple times, use the last occurrence or the largest value that is less than double the item sum.
-
-SELF-CHECK: Sum your lineItem prices. If the sum is more than 25% away from subtotal (or total if no surcharge), you missed items or misread a price — look again before finalising.
-
-Return JSON exactly matching this structure (no extra fields, no markdown):
-{
-  "merchant": "string",
-  "date": "YYYY-MM-DD",
-  "time": "HH:MM or null",
-  "lineItems": [
-    { "name": "string", "price": 0.00, "category": "food" },
-    { "name": "string (multi-qty example)", "price": 0.00, "quantity": 2, "category": "drink" }
-  ],
-  "subtotal": null,
-  "surcharge": null,
-  "total": 0.00
-}`;
+Output this exact JSON structure filled with the receipt data:
+{"merchant":"","date":"","time":null,"lineItems":[{"name":"","price":0.00,"category":"food"}],"subtotal":null,"surcharge":null,"total":0.00}`;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 function arrayBufferToBase64(buffer: ArrayBuffer) {
@@ -210,11 +154,17 @@ async function parseWithClaude(base64Image: string, mimeType = 'image/jpeg'): Pr
 
     const json = await response.json();
     const raw = json?.content?.[0]?.text ?? '';
-    if (!raw) return null;
+    if (!raw) {
+      console.error('Claude returned empty content');
+      return null;
+    }
 
-    // Extract JSON — Claude should output clean JSON per the prompt, but strip any wrapping just in case
+    // Extract JSON — strip any markdown wrapping just in case
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    if (!jsonMatch) {
+      console.error('No JSON found in Claude response:', raw.slice(0, 300));
+      return null;
+    }
 
     const parsed = JSON.parse(jsonMatch[0]);
     const result = validateAndBuild(parsed, '');
