@@ -40,6 +40,7 @@ export type LineItem = {
   name: string;
   price: number;
   allocatedTo: string[];
+  category?: string;
 };
 
 export type ReceiptDraft = {

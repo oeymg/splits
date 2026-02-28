@@ -17,6 +17,7 @@ import { LineItem, Person, ReceiptDraft } from '../types';
 import { AvatarCircle } from '../components/AvatarCircle';
 import { colors, spacing, borderRadius, shadows, getAvatarColor } from '../theme';
 import { StepIndicator } from '../components/StepIndicator';
+import { getCategoryEmoji } from '../lib/categories';
 
 type Props = {
     receipt: ReceiptDraft;
@@ -32,12 +33,37 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
 
     const [imageExpanded, setImageExpanded] = useState(false);
 
+    // Local string state for price inputs — allows typing "4." without it snapping back
+    const [priceTexts, setPriceTexts] = useState<Record<string, string>>(() =>
+        Object.fromEntries(
+            receipt.lineItems.map(i => [i.id, i.price > 0 ? i.price.toFixed(2) : ''])
+        )
+    );
+
+    // Keep priceTexts in sync when items are added or removed
+    useEffect(() => {
+        setPriceTexts(prev => {
+            const next = { ...prev };
+            const ids = new Set(receipt.lineItems.map(i => i.id));
+            for (const item of receipt.lineItems) {
+                if (!(item.id in next)) next[item.id] = '';
+            }
+            for (const id of Object.keys(next)) {
+                if (!ids.has(id)) delete next[id];
+            }
+            return next;
+        });
+    }, [receipt.lineItems]);
+
     // Entrance animations
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const slideAnim = useRef(new Animated.Value(60)).current;
 
     // Per-item stagger animations
     const itemAnimsRef = useRef<Map<string, { opacity: Animated.Value; translateY: Animated.Value; scale: Animated.Value }>>(new Map());
+    // Separate set to track which items have had their animation *started*
+    // (itemAnimsRef entries are created during render before the effect runs, so we can't use .has() alone)
+    const animatedIdsRef = useRef<Set<string>>(new Set());
     const mountedRef = useRef(false);
 
     const getItemAnim = (id: string) => {
@@ -70,8 +96,13 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
 
     // Stagger items in on mount
     useEffect(() => {
-        if (receipt.lineItems.length === 0) return;
+        // Always mark as mounted so newly-added items can animate
         mountedRef.current = true;
+        if (receipt.lineItems.length === 0) return;
+
+        // Mark all initial items as animated before starting stagger
+        receipt.lineItems.forEach(item => animatedIdsRef.current.add(item.id));
+
         Animated.stagger(
             40,
             receipt.lineItems.map((item) => {
@@ -104,7 +135,10 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
     useEffect(() => {
         if (!mountedRef.current) return;
         receipt.lineItems.forEach((item) => {
-            if (!itemAnimsRef.current.has(item.id)) {
+            // Use animatedIdsRef (not itemAnimsRef) — getItemAnim creates the map entry
+            // during render before this effect runs, so .has() on itemAnimsRef would always be true
+            if (!animatedIdsRef.current.has(item.id)) {
+                animatedIdsRef.current.add(item.id);
                 const anim = getItemAnim(item.id);
                 Animated.parallel([
                     Animated.timing(anim.opacity, {
@@ -130,6 +164,9 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
         });
         // Clean up removed items
         const currentIds = new Set(receipt.lineItems.map(i => i.id));
+        for (const id of [...animatedIdsRef.current]) {
+            if (!currentIds.has(id)) animatedIdsRef.current.delete(id);
+        }
         for (const id of itemAnimsRef.current.keys()) {
             if (!currentIds.has(id)) itemAnimsRef.current.delete(id);
         }
@@ -172,7 +209,7 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
             ...prev,
             lineItems: [
                 ...prev.lineItems,
-                { id: `li-${Date.now()}`, name: 'New item', price: 0, allocatedTo: [] }
+                { id: `li-${Date.now()}`, name: '', price: 0, allocatedTo: [] }
             ]
         }));
     };
@@ -186,7 +223,7 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
 
     return (
         <SafeAreaView style={styles.safe}>
-            <ScrollView contentContainerStyle={styles.container}>
+            <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
                 <Pressable style={styles.backPill} onPress={onBack}>
                     <Text style={styles.backText}>‹ Back</Text>
                 </Pressable>
@@ -244,6 +281,7 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
 
                 {receipt.lineItems.map((item) => {
                     const anim = getItemAnim(item.id);
+                    const emoji = getCategoryEmoji(item);
                     return (
                     <Animated.View
                         key={item.id}
@@ -253,16 +291,37 @@ export function ItemsScreen({ receipt, setReceipt, people, onNext, onBack }: Pro
                         ]}
                     >
                         <View style={styles.itemRow}>
+                            <Text style={styles.categoryEmoji}>{emoji}</Text>
                             <TextInput
                                 style={styles.itemName}
                                 value={item.name}
+                                placeholder="Item name"
+                                placeholderTextColor={colors.textLight}
                                 onChangeText={(v) => updateLineItem(item.id, { name: v })}
                             />
                             <TextInput
                                 style={styles.itemPrice}
-                                value={item.price.toString()}
+                                value={priceTexts[item.id] ?? ''}
+                                placeholder="0.00"
+                                placeholderTextColor={colors.textLight}
                                 keyboardType="decimal-pad"
-                                onChangeText={(v) => updateLineItem(item.id, { price: coerceNumber(v) })}
+                                onChangeText={(v) => {
+                                    // Allow digits and a single decimal point
+                                    const cleaned = v.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
+                                    setPriceTexts(prev => ({ ...prev, [item.id]: cleaned }));
+                                    const num = parseFloat(cleaned);
+                                    if (Number.isFinite(num)) {
+                                        updateLineItem(item.id, { price: num });
+                                    }
+                                }}
+                                onBlur={() => {
+                                    const num = parseFloat(priceTexts[item.id] || '0') || 0;
+                                    updateLineItem(item.id, { price: num });
+                                    setPriceTexts(prev => ({
+                                        ...prev,
+                                        [item.id]: num > 0 ? num.toFixed(2) : ''
+                                    }));
+                                }}
                             />
                             <Pressable onPress={() => removeLineItem(item.id)} style={styles.removeBtn}>
                                 <Text style={styles.removeBtnText}>✕</Text>
@@ -410,6 +469,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: spacing.sm,
         marginBottom: spacing.md
+    },
+    categoryEmoji: {
+        fontSize: 18,
+        width: 26,
+        textAlign: 'center',
     },
     itemName: {
         flex: 1,

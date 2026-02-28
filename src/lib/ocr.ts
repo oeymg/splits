@@ -8,7 +8,7 @@ type OcrResponse = {
   total?: number;
   subtotal?: number;
   surcharge?: number;
-  lineItems?: Array<{ name: string; price: number; quantity?: number }>;
+  lineItems?: Array<{ name: string; price: number; quantity?: number; category?: string }>;
   rawOcrText?: string;
   confidence?: number;
   method?: string;
@@ -72,7 +72,8 @@ export async function runOcr({
       id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: item.name,
       price: priceEach,
-      allocatedTo: [] as string[]
+      allocatedTo: [] as string[],
+      ...(item.category ? { category: item.category } : {})
     }));
   });
 

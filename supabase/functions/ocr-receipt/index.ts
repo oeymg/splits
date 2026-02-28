@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 
 // ─── Types ──────────────────────────────────────────────────────────
-type ParsedLineItem = { name: string; price: number; quantity?: number };
+type ParsedLineItem = { name: string; price: number; quantity?: number; category?: string };
 
 type ParsedReceipt = {
   merchant: string;
@@ -22,42 +22,15 @@ type ParsedReceipt = {
 // ─── Config ─────────────────────────────────────────────────────────
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-const visionApiKey = Deno.env.get('VISION_API_KEY') ?? '';
-const geminiApiKey = Deno.env.get('GEMINI_API_KEY') ?? visionApiKey;
+const openaiApiKey = Deno.env.get('OPENAI_API_KEY') ?? '';
 const bucket = Deno.env.get('RECEIPTS_BUCKET') ?? 'receipts';
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false }
 });
 
-// ─── Structured Output Schema ─────────────────────────────────────────
-const RESPONSE_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    merchant: { type: 'STRING' },
-    date: { type: 'STRING' },
-    time: { type: 'STRING', nullable: true },
-    lineItems: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          name: { type: 'STRING' },
-          price: { type: 'NUMBER' },
-          quantity: { type: 'INTEGER', nullable: true }
-        },
-        required: ['name', 'price']
-      }
-    },
-    subtotal: { type: 'NUMBER', nullable: true },
-    surcharge: { type: 'NUMBER', nullable: true },
-    total: { type: 'NUMBER' }
-  },
-  required: ['merchant', 'date', 'lineItems', 'total']
-};
-
 // ─── Prompt ──────────────────────────────────────────────────────────
-const RECEIPT_PROMPT = `You are a precise Australian receipt parser for a bill-splitting app.
+const RECEIPT_PROMPT = `You are a precise Australian receipt parser for a bill-splitting app. Respond with ONLY valid JSON — no markdown, no code blocks, no explanation.
 
 YOUR JOB: Extract only the ordered food/drink/products and the final amounts. Nothing else.
 
@@ -96,6 +69,15 @@ lineItems — EVERY ordered item with a price > 0:
   quantity: Integer > 1 only when quantity is EXPLICITLY printed (e.g. "2x", "Qty 3", "× 2"). Omit if 1.
     • "Nuggets (6 piece)" → this is a portion description, NOT a quantity. Omit quantity.
     • "Family Serve" → NOT a quantity.
+  category: Classify each item as exactly one of these strings:
+    • "coffee"  — espresso, latte, flat white, cappuccino, long black, macchiato, cold brew, affogato
+    • "alcohol" — beer, wine, spirits, cocktails, cider
+    • "drink"   — non-alcoholic non-coffee beverages: juice, water, soda, tea, smoothie, hot chocolate
+    • "food"    — cooked meals, snacks, burgers, pizza, sandwiches, chips, anything eaten as a meal
+    • "dessert" — cake, ice cream, gelato, brownie, pastry, tart, sweets
+    • "grocery" — packaged/supermarket items, household goods
+    • "fuel"    — petrol, diesel, unleaded, LPG
+    • "other"   — anything that doesn't fit the above
 
 MULTI-LINE ITEMS: If item name is on one line and its price is on the very next line alone, merge them into a single item.
 
@@ -110,12 +92,18 @@ total: The FINAL amount the customer paid. If printed multiple times, use the la
 
 SELF-CHECK: Sum your lineItem prices. If the sum is more than 25% away from subtotal (or total if no surcharge), you missed items or misread a price — look again before finalising.
 
-VENUE HINTS:
-• Café / restaurant: every food and drink line with a price is a line item.
-• Woolworths / Coles / Aldi / IGA: skip "Savings", "Specials", "Points earned", "Member price" lines.
-• IKEA: strip 8-digit article codes; keep product name with dimensions.
-• Bottle shop / pub: alcohol and snacks are valid items.
-• Petrol station: fuel lines are items — use the dollar total (not the per-litre rate).`;
+Return JSON exactly matching this structure (no extra fields, no markdown):
+{
+  "merchant": "string",
+  "date": "YYYY-MM-DD",
+  "time": "HH:MM or null",
+  "lineItems": [
+    { "name": "string", "price": 0.00, "quantity": null, "category": "food" }
+  ],
+  "subtotal": null,
+  "surcharge": null,
+  "total": 0.00
+}`;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 function arrayBufferToBase64(buffer: ArrayBuffer) {
@@ -125,7 +113,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
   return btoa(binary);
 }
 
-// Classify whether an error is transient and worth retrying
 function isTransientError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   return (
@@ -169,7 +156,6 @@ async function retryWithBackoff<T>(
       return await fn();
     } catch (error) {
       lastError = error as Error;
-      // Don't retry permanent errors (bad request, too large, etc.)
       if (!isTransientError(error)) throw error;
       if (attempt === maxRetries - 1) break;
       const delay = baseDelay * Math.pow(2, attempt);
@@ -180,112 +166,65 @@ async function retryWithBackoff<T>(
   throw lastError || new Error('All retry attempts failed');
 }
 
-// ─── Gemini Vision (PRIMARY) ─────────────────────────────────────────
-async function parseWithGeminiVision(base64Image: string, mimeType = 'image/jpeg'): Promise<ParsedReceipt | null> {
-  if (!geminiApiKey) return null;
+// ─── GPT-4o-mini Vision (PRIMARY) ────────────────────────────────────
+async function parseWithGPT4oVision(base64Image: string, mimeType = 'image/jpeg'): Promise<ParsedReceipt | null> {
+  if (!openaiApiKey) return null;
 
-  // Rough size guard: base64 of ~3.5 MB raw image ≈ 4.7 MB string. Gemini limit is ~20MB inline but
-  // very large images slow down processing significantly.
-  if (base64Image.length > 6_000_000) {
+  if (base64Image.length > 8_000_000) {
     console.warn(`Image is large (${(base64Image.length / 1_000_000).toFixed(1)}MB base64) — may be slow`);
   }
 
   try {
     const response = await retryWithBackoff(async () => {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: RECEIPT_PROMPT },
-                { inlineData: { mimeType, data: base64Image } }
-              ]
-            }],
-            generationConfig: {
-              temperature: 0,        // Zero temperature for deterministic extraction
-              maxOutputTokens: 2048, // Sufficient for any realistic receipt
-              responseMimeType: 'application/json',
-              responseSchema: RESPONSE_SCHEMA
-            }
-          }),
-          signal: AbortSignal.timeout(35000)
-        }
-      );
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiApiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          response_format: { type: 'json_object' },
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: RECEIPT_PROMPT },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:${mimeType};base64,${base64Image}`,
+                  detail: 'high'
+                }
+              }
+            ]
+          }],
+          temperature: 0,
+          max_tokens: 2048
+        }),
+        signal: AbortSignal.timeout(40000)
+      });
 
       if (!res.ok) {
         const errorText = await res.text();
-        console.error('Gemini Vision error:', res.status, errorText);
-        throw new Error(`Gemini Vision API error: ${res.status} — ${errorText.slice(0, 200)}`);
+        console.error('GPT-4o-mini error:', res.status, errorText);
+        throw new Error(`OpenAI API error: ${res.status} — ${errorText.slice(0, 200)}`);
       }
       return res;
     });
 
     const json = await response.json();
-    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    const text = json?.choices?.[0]?.message?.content ?? '';
     if (!text) return null;
 
     const parsed = JSON.parse(text);
     const result = validateAndBuild(parsed, '');
     if (result) {
       result.confidence = 0.95;
-      result.method = 'gemini-vision';
+      result.method = 'gpt4o-vision';
     }
     return result;
   } catch (error) {
-    console.error('Gemini Vision failed:', classifyError(error));
-    return null;
-  }
-}
-
-// ─── Gemini Text Parser (FALLBACK 1) ─────────────────────────────────
-async function parseWithGeminiText(ocrText: string): Promise<ParsedReceipt | null> {
-  if (!geminiApiKey) return null;
-
-  const prompt = `${RECEIPT_PROMPT}\n\nRECEIPT TEXT:\n${ocrText}`;
-
-  try {
-    const response = await retryWithBackoff(async () => {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0,
-              maxOutputTokens: 1536,
-              responseMimeType: 'application/json',
-              responseSchema: RESPONSE_SCHEMA
-            }
-          }),
-          signal: AbortSignal.timeout(25000)
-        }
-      );
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Gemini Text API error: ${res.status} — ${errorText.slice(0, 200)}`);
-      }
-      return res;
-    });
-
-    const json = await response.json();
-    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    if (!text) return null;
-
-    const parsed = JSON.parse(text);
-    const result = validateAndBuild(parsed, ocrText);
-    if (result) {
-      result.confidence = 0.75;
-      result.method = 'gemini-text';
-    }
-    return result;
-  } catch (error) {
-    console.error('Gemini text failed:', classifyError(error));
+    console.error('GPT-4o-mini Vision failed:', classifyError(error));
     return null;
   }
 }
@@ -293,6 +232,8 @@ async function parseWithGeminiText(ocrText: string): Promise<ParsedReceipt | nul
 // ─── Validation & Builder ────────────────────────────────────────────
 function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null {
   const validationWarnings: string[] = [];
+
+  const VALID_CATEGORIES = new Set(['coffee', 'alcohol', 'drink', 'food', 'dessert', 'grocery', 'fuel', 'other']);
 
   const lineItems: ParsedLineItem[] = (parsed.lineItems ?? [])
     .map((item: any) => {
@@ -304,20 +245,23 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
       if (typeof quantity === 'string') {
         quantity = parseFloat(quantity.replace(/[^0-9.]/g, '')) || undefined;
       }
-      // Guard: quantity must be a reasonable positive integer
       if (quantity != null && (!Number.isInteger(quantity) || quantity < 2 || quantity > 99)) {
         quantity = undefined;
       }
 
-      // Clean up item name — strip trailing dots and extra whitespace
       const name = typeof item.name === 'string'
         ? item.name.trim().replace(/[.\-_]{3,}$/, '').replace(/\s{2,}/g, ' ').trim()
         : '';
 
+      const category = typeof item.category === 'string' && VALID_CATEGORIES.has(item.category)
+        ? item.category
+        : undefined;
+
       return {
         name,
         price: Number.isFinite(price) ? Math.round(price * 100) / 100 : 0,
-        ...(quantity != null && { quantity })
+        ...(quantity != null && { quantity }),
+        ...(category != null && { category })
       };
     })
     .filter((item: ParsedLineItem) => item.name.length > 0 && item.price > 0);
@@ -333,14 +277,12 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
     ? Math.round(parsed.surcharge * 100) / 100
     : undefined;
 
-  // Expected subtotal (items only, before surcharge)
   const expectedSubtotal = typeof parsed.subtotal === 'number' && parsed.subtotal > 0
     ? parsed.subtotal
     : surcharge
       ? Math.round((reportedTotal - surcharge) * 100) / 100
       : reportedTotal;
 
-  // Validate item sum vs expected subtotal
   if (expectedSubtotal > 0 && computedTotal > 0) {
     const ratio = computedTotal / expectedSubtotal;
     if (ratio < 0.4 || ratio > 2.5) {
@@ -350,7 +292,6 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
     }
   }
 
-  // Sanity: no single item should cost more than the total
   const overpriced = lineItems.filter(item => item.price > reportedTotal * 1.05);
   if (overpriced.length > 0) {
     validationWarnings.push(`${overpriced.length} item(s) have prices larger than the bill total — please review`);
@@ -370,7 +311,6 @@ function validateAndBuild(parsed: any, rawOcrText: string): ParsedReceipt | null
     validationWarnings.push('Unusually high total — please verify');
   }
 
-  // Validate time format
   let time: string | undefined;
   if (parsed.time && typeof parsed.time === 'string') {
     const match = parsed.time.match(/^(\d{1,2}):(\d{2})$/);
@@ -402,7 +342,7 @@ function formatAud(n: number) {
   return `$${n.toFixed(2)}`;
 }
 
-// ─── Regex Fallback (FALLBACK 2) ─────────────────────────────────────
+// ─── Regex Fallback ───────────────────────────────────────────────────
 const totalKeywords = ['total', 'amount due', 'balance due', 'grand total', 'amount paid'];
 const subtotalKeywords = ['subtotal', 'sub total', 'sub-total'];
 const surchargeKeywords = ['surcharge', 'holiday surcharge', 'weekend surcharge', 'service charge', 'service fee', 'credit card fee'];
@@ -418,13 +358,10 @@ const skipKeywords = [
 
 const priceRegex = /\$?\s*(-?\d{1,4}(?:[.,]\d{3})*(?:[.,]\d{2}))\s*(?:[A-Z*])?\s*$/i;
 const quantityRegex = /^(\d+)\s*[xX×]\s*/;
-// Strip leading barcodes (4–13 digits) followed by whitespace — covers EAN-8 to EAN-13
 const productCodeRegex = /^\d{4,13}\s+/;
 
 const dateRegexes = [
-  // ISO: 2025-03-15
   /\b(\d{4})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/,
-  // AU: 15/03/2025 or 15/03/25
   /\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](\d{2,4})\b/
 ];
 
@@ -450,12 +387,10 @@ function lineHasKeyword(line: string, keywords: string[]) {
 }
 
 function parseDate(text: string) {
-  // ISO format first
   const isoMatch = text.match(dateRegexes[0]);
   if (isoMatch) {
     return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
   }
-  // AU format DD/MM/YY or DD/MM/YYYY
   const auMatch = text.match(dateRegexes[1]);
   if (auMatch) {
     const year = auMatch[3].length === 2 ? `20${auMatch[3]}` : auMatch[3];
@@ -483,7 +418,6 @@ function parseTime(text: string): string {
 function parseReceiptFallback(text: string): ParsedReceipt {
   const rawLines = text.split('\n').map((l) => l.trim()).filter(Boolean);
 
-  // Merge name lines followed by standalone price lines
   const priceOnlyRe = /^\s*\$?\s*-?\d{1,4}(?:[.,]\d{3})*(?:[.,]\d{2})\s*(?:[A-Z*])?\s*$/i;
   const lines: string[] = [];
   for (let i = 0; i < rawLines.length; i++) {
@@ -497,12 +431,11 @@ function parseReceiptFallback(text: string): ParsedReceipt {
     }
   }
 
-  // Merchant: first line with ≥ 3 alpha chars that isn't an address/ABN/phone
   const merchant = lines.find((line) => {
     if (line.length < 3 || /^\d+$/.test(line)) return false;
     if (/^\d+\s+(st|rd|nd|th|ave|blvd|street|road|drive|lane|court|crt|pl|place)/i.test(line)) return false;
     if (/^(abn|phone|tel|fax|tax invoice|receipt|duplicate|void)/i.test(line)) return false;
-    if (/[^A-Za-z0-9\s&'.\-–]/.test(line) && !/ /.test(line)) return false; // skip pure symbol lines
+    if (/[^A-Za-z0-9\s&'.\-–]/.test(line) && !/ /.test(line)) return false;
     return /[A-Za-z]{3,}/.test(line);
   }) ?? 'Receipt';
 
@@ -527,7 +460,6 @@ function parseReceiptFallback(text: string): ParsedReceipt {
     if (!label || label.length < 2) continue;
 
     if (lineHasKeyword(line, totalKeywords) && !lineHasKeyword(line, subtotalKeywords)) {
-      // Keep the highest total seen (some receipts print it twice)
       if (!total || price > total) total = price;
       continue;
     }
@@ -542,7 +474,6 @@ function parseReceiptFallback(text: string): ParsedReceipt {
       label = label.replace(quantityRegex, '').trim();
     }
 
-    // Strip product codes and cleanup
     label = label.replace(productCodeRegex, '').trim();
     label = label.replace(/[.\-_]{3,}$/g, '').replace(/\s{2,}/g, ' ').trim();
 
@@ -574,8 +505,8 @@ serve(async (req) => {
   }
 
   try {
-    if (!visionApiKey && !geminiApiKey) {
-      throw new Error('Missing VISION_API_KEY or GEMINI_API_KEY environment variable');
+    if (!openaiApiKey) {
+      throw new Error('Missing OPENAI_API_KEY environment variable');
     }
 
     const { imagePath, imageUrl, imageBase64, mimeType = 'image/jpeg' } = await req.json();
@@ -600,73 +531,32 @@ serve(async (req) => {
 
     let parsed: ParsedReceipt | null = null;
 
-    // ── Step 2: PRIMARY — Gemini Vision (image → structured JSON) ──
-    if (geminiApiKey) {
-      console.log(`🔍 Gemini Vision (${(base64Content.length / 1000).toFixed(0)} KB base64)...`);
-      parsed = await parseWithGeminiVision(base64Content, mimeType);
-      if (parsed) {
-        console.log(`✅ Gemini Vision: ${parsed.lineItems.length} items, total=${formatAud(parsed.total)}, surcharge=${formatAud(parsed.surcharge ?? 0)}`);
-      }
+    // ── Step 2: PRIMARY — GPT-4o-mini Vision ──
+    console.log(`🔍 GPT-4o-mini Vision (${(base64Content.length / 1000).toFixed(0)} KB base64)...`);
+    parsed = await parseWithGPT4oVision(base64Content, mimeType);
+    if (parsed) {
+      console.log(`✅ GPT-4o-mini: ${parsed.lineItems.length} items, total=${formatAud(parsed.total)}, surcharge=${formatAud(parsed.surcharge ?? 0)}`);
     }
 
-    // ── Step 3: FALLBACK 1 — Google Vision API text → Gemini text ──
-    if (!parsed && visionApiKey) {
-      console.log('⚡ Falling back to Vision API + Gemini text...');
-      try {
-        const visionResp = await retryWithBackoff(async () => {
-          const res = await fetch(
-            `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                requests: [{
-                  image: { content: base64Content },
-                  features: [{ type: 'DOCUMENT_TEXT_DETECTION', maxResults: 1 }],
-                  imageContext: { languageHints: ['en'] }
-                }]
-              }),
-              signal: AbortSignal.timeout(25000)
-            }
-          );
-          if (!res.ok) throw new Error(`Vision API error: ${res.status}`);
-          return res;
-        });
-
-        const visionJson = await visionResp.json();
-        const ocrText =
-          visionJson?.responses?.[0]?.fullTextAnnotation?.text ??
-          visionJson?.responses?.[0]?.textAnnotations?.[0]?.description ?? '';
-
-        if (ocrText.trim()) {
-          parsed = await parseWithGeminiText(ocrText);
-          if (parsed) {
-            console.log(`✅ Vision+Gemini text: ${parsed.lineItems.length} items`);
-          } else {
-            console.log('🔧 Using regex fallback...');
-            parsed = parseReceiptFallback(ocrText);
-            console.log(`✅ Regex: ${parsed.lineItems.length} items`);
-          }
-        }
-      } catch (error) {
-        console.error('Vision API failed:', classifyError(error));
-      }
+    // ── Step 3: FALLBACK — Regex parser ──
+    if (!parsed) {
+      console.log('🔧 GPT-4o failed — using regex fallback...');
+      // For regex we need raw text; without a text extraction step we emit a warning
+      parsed = {
+        merchant: 'Receipt',
+        date: '',
+        total: 0,
+        lineItems: [],
+        rawOcrText: '',
+        confidence: 0,
+        method: 'none',
+        validationWarnings: ['Could not read the receipt. Try a clearer, well-lit photo.']
+      };
     }
 
-    const result = parsed ?? {
-      merchant: 'Receipt',
-      date: '',
-      total: 0,
-      lineItems: [],
-      rawOcrText: '',
-      confidence: 0,
-      method: 'none',
-      validationWarnings: ['Could not read the receipt. Try a clearer, well-lit photo.']
-    };
+    console.log(`📊 OCR Complete: method=${parsed.method}, items=${parsed.lineItems.length}, total=${formatAud(parsed.total)}, warnings=${parsed.validationWarnings?.length ?? 0}`);
 
-    console.log(`📊 OCR Complete: method=${result.method}, items=${result.lineItems.length}, total=${formatAud(result.total)}, surcharge=${formatAud(result.surcharge ?? 0)}, warnings=${result.validationWarnings?.length ?? 0}`);
-
-    return new Response(JSON.stringify(result), {
+    return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
 
