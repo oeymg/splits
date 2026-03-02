@@ -19,64 +19,33 @@ type ShareMessageParams = {
   payer: Person | undefined;
   paymentPrefs?: PaymentPrefs;
   settlements: SettlementEntry[];
+  shareUrl?: string | null;
 };
 
 export function buildShareMessage({
   groupName,
-  merchant,
-  date,
-  time,
-  total,
-  payer,
-  paymentPrefs,
-  settlements
+  settlements,
+  shareUrl
 }: ShareMessageParams) {
   const lines: string[] = [];
 
-  lines.push(`${groupName || 'Group'} · ${merchant || 'Receipt'}`);
-  if (date) {
-    lines.push(`Date: ${date}${time ? ` at ${time}` : ''}`);
-  }
-  if (Number.isFinite(total) && total > 0) {
-    lines.push(`Total: ${formatCurrency(total)}`);
-  }
-
+  lines.push(`The split for '${groupName || 'Group'}'.`);
   lines.push('');
 
-  if (payer) {
-    lines.push(`Pay to: ${payer.name}`);
+  // Show payer's share first
+  const payerEntry = settlements.find((s) => s.isPayer);
+  if (payerEntry) {
+    lines.push(`${payerEntry.person.name} (paid): ${formatCurrency(payerEntry.totalOwed)}`);
   }
 
-  if (paymentPrefs) {
-    const payLine = formatPaymentLine(paymentPrefs);
-    if (payLine) lines.push(payLine);
+  // Then show what others owe
+  for (const entry of settlements.filter((s) => !s.isPayer)) {
+    lines.push(`${entry.person.name}: ${formatCurrency(entry.totalOwed)}`);
   }
 
-  if (settlements.length) {
+  if (shareUrl) {
     lines.push('');
-
-    // Show payer's share first
-    const payerEntry = settlements.find((s) => s.isPayer);
-    if (payerEntry) {
-      lines.push(`${payerEntry.person.name} (paid): ${formatCurrency(payerEntry.totalOwed)}`);
-      for (const item of payerEntry.items) {
-        lines.push(`  • ${item.name} (${formatCurrency(item.price)})`);
-      }
-      lines.push('');
-    }
-
-    // Then show what others owe
-    const others = settlements.filter((s) => !s.isPayer);
-    if (others.length) {
-      lines.push('Others owe:');
-      for (const entry of others) {
-        lines.push(`${entry.person.name}: ${formatCurrency(entry.totalOwed)}`);
-        for (const item of entry.items) {
-          lines.push(`  • ${item.name} (${formatCurrency(item.price)})`);
-        }
-        lines.push('');
-      }
-    }
+    lines.push(`To view the Split: ${shareUrl}`);
   }
 
   return lines.join('\n');

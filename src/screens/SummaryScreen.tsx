@@ -151,12 +151,13 @@ export function SummaryScreen({ groupName, receipt, people, payerId, onStartOver
                 merchant: receipt.merchant,
                 date: receipt.date,
                 time: receipt.time,
-                total: allocatedTotal, // Use allocated total for consistency
+                total: allocatedTotal,
                 payer,
                 paymentPrefs: payer?.paymentPrefs,
-                settlements
+                settlements,
+                shareUrl
             }),
-        [groupName, receipt, payer, settlements, allocatedTotal]
+        [groupName, receipt, payer, settlements, allocatedTotal, shareUrl]
     );
 
     const handleShare = async () => {
